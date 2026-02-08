@@ -40,6 +40,7 @@ from lib import (
     score,
     ui,
     websearch,
+    x_enrich,
     xai_x,
 )
 
@@ -172,7 +173,7 @@ def run_research(
     """Run the research pipeline.
 
     Returns:
-        Tuple of (reddit_items, x_items, web_needed, raw_openai, raw_xai, raw_reddit_enriched, reddit_error, x_error)
+        Tuple of (reddit_items, x_items, web_needed, raw_openai, raw_xai, raw_reddit_enriched, raw_x_enriched, reddit_error, x_error)
 
     Note: web_needed is True when WebSearch should be performed by Claude.
     The script outputs a marker and Claude handles WebSearch in its session.
@@ -182,6 +183,7 @@ def run_research(
     raw_openai = None
     raw_xai = None
     raw_reddit_enriched = []
+    raw_x_enriched = []
     reddit_error = None
     x_error = None
 
@@ -193,7 +195,7 @@ def run_research(
         if progress:
             progress.start_web_only()
             progress.end_web_only()
-        return reddit_items, x_items, True, raw_openai, raw_xai, raw_reddit_enriched, reddit_error, x_error
+        return reddit_items, x_items, True, raw_openai, raw_xai, raw_reddit_enriched, raw_x_enriched, reddit_error, x_error
 
     # Determine which searches to run
     run_reddit = sources in ("both", "reddit", "all", "reddit-web")
@@ -271,7 +273,41 @@ def run_research(
         if progress:
             progress.end_reddit_enrich()
 
-    return reddit_items, x_items, web_needed, raw_openai, raw_xai, raw_reddit_enriched, reddit_error, x_error
+    # Enrich X items with thread context (sequential, with error handling per-item)
+    if x_items and (config.get("XAI_API_KEY") or mock):
+        enrichable = [i for i, item in enumerate(x_items) if x_enrich.should_enrich(item)]
+
+        if enrichable:
+            if progress:
+                progress.start_x_enrich(1, len(enrichable))
+
+            for count, idx in enumerate(enrichable):
+                if progress and count > 0:
+                    progress.update_x_enrich(count + 1, len(enrichable))
+
+                try:
+                    xai_key = config.get("XAI_API_KEY", "mock")
+                    xai_model = selected_models.get("xai", "grok-3-mini")
+                    if mock:
+                        mock_thread = load_fixture("xai_thread_sample.json")
+                        x_items[idx] = x_enrich.enrich_x_item(
+                            x_items[idx], xai_key, xai_model,
+                            mock_response=mock_thread,
+                        )
+                    else:
+                        x_items[idx] = x_enrich.enrich_x_item(
+                            x_items[idx], xai_key, xai_model,
+                        )
+                except Exception as e:
+                    if progress:
+                        progress.show_error(f"X enrich failed for {x_items[idx].get('url', 'unknown')}: {e}")
+
+                raw_x_enriched.append(x_items[idx])
+
+            if progress:
+                progress.end_x_enrich()
+
+    return reddit_items, x_items, web_needed, raw_openai, raw_xai, raw_reddit_enriched, raw_x_enriched, reddit_error, x_error
 
 
 def main():
@@ -312,6 +348,11 @@ def main():
         action="store_true",
         help="Include general web search alongside Reddit/X (lower weighted)",
     )
+    parser.add_argument(
+        "--no-coach",
+        action="store_true",
+        help="Skip query coaching (for automated/scripted use)",
+    )
 
     args = parser.parse_args()
 
@@ -337,6 +378,29 @@ def main():
         print("Error: Please provide a topic to research.", file=sys.stderr)
         print("Usage: python3 last30days.py <topic> [options]", file=sys.stderr)
         sys.exit(1)
+
+    # Output parsed query intent for SKILL.md coaching (stderr so JSON output stays clean)
+    if not args.no_coach:
+        topic_words = args.topic.strip().split()
+        breadth = "broad" if len(topic_words) <= 1 else "specific"
+        # Simple query type detection heuristics
+        topic_lower = args.topic.lower()
+        if any(w in topic_lower for w in ("best", "top", "recommend", "favourite", "favorite")):
+            detected_type = "RECOMMENDATIONS"
+        elif any(w in topic_lower for w in ("news", "latest", "announcement", "update", "happening")):
+            detected_type = "NEWS"
+        elif any(w in topic_lower for w in ("prompt", "technique", "how to", "tips", "practice")):
+            detected_type = "PROMPTING"
+        else:
+            detected_type = "GENERAL"
+        # Use stderr so it doesn't corrupt --emit=json stdout
+        sys.stderr.write("### QUERY PARSED ###\n")
+        sys.stderr.write(f"TOPIC: {args.topic}\n")
+        sys.stderr.write(f"QUERY_TYPE: {detected_type}\n")
+        sys.stderr.write(f"BREADTH: {breadth}\n")
+        sys.stderr.write(f"WORD_COUNT: {len(topic_words)}\n")
+        sys.stderr.write("### END QUERY PARSED ###\n\n")
+        sys.stderr.flush()
 
     # Load config
     config = env.get_config()
@@ -410,7 +474,7 @@ def main():
         mode = sources
 
     # Run research
-    reddit_items, x_items, web_needed, raw_openai, raw_xai, raw_reddit_enriched, reddit_error, x_error = run_research(
+    reddit_items, x_items, web_needed, raw_openai, raw_xai, raw_reddit_enriched, raw_x_enriched, reddit_error, x_error = run_research(
         args.topic,
         sources,
         config,
@@ -466,7 +530,7 @@ def main():
     report.context_snippet_md = render.render_context_snippet(report)
 
     # Write outputs
-    render.write_outputs(report, raw_openai, raw_xai, raw_reddit_enriched)
+    render.write_outputs(report, raw_openai, raw_xai, raw_reddit_enriched, raw_x_enriched)
 
     # Show completion
     if sources == "web":

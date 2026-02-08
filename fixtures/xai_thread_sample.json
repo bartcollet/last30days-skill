@@ -1,0 +1,22 @@
+{
+  "id": "resp_xai_thread_mock",
+  "object": "response",
+  "created": 1706140800,
+  "model": "grok-3-mini",
+  "output": [
+    {
+      "type": "message",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "{\n  \"thread_replies\": [\n    \"@techleader Great breakdown! Point 3 about keeping skills under 50 lines is key — complexity creeps in fast.\",\n    \"@devops_pro Agree on the fork context tip. My data-heavy skill went from timing out to running in 3s.\",\n    \"@aisceptic Tried this approach but found that allowed-tools constraints can be too restrictive for multi-step workflows.\"\n  ],\n  \"thread_insight\": \"Community broadly agrees on simplicity-first approach but debates the right balance between security restrictions and skill flexibility.\",\n  \"is_thread_head\": true\n}"
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 120,
+    "completion_tokens": 200,
+    "total_tokens": 320
+  }
+}

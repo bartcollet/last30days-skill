@@ -150,6 +150,9 @@ def normalize_x_items(
             engagement=engagement,
             relevance=item.get("relevance", 0.5),
             why_relevant=item.get("why_relevant", ""),
+            thread_replies=item.get("thread_replies", []),
+            thread_insight=item.get("thread_insight", ""),
+            is_thread_head=item.get("is_thread_head", False),
         ))
 
     return normalized
