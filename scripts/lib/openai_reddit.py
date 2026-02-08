@@ -65,7 +65,9 @@ Search for the core subject:
 2. "reddit [core subject]"
 3. "[core subject] reddit"
 
-Return as many relevant threads as you find. We filter by date server-side.
+DATE RANGE: Only include threads from {from_date} to {to_date}.
+Do NOT include threads older than {from_date}. Return fewer results rather than older ones.
+We also filter server-side, but you should respect the date range.
 
 STEP 3: INCLUDE ALL MATCHES
 - Include ALL threads about the core subject

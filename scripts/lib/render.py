@@ -168,6 +168,15 @@ def render_compact(report: schema.Report, limit: int = 15, missing_keys: str = "
             lines.append(f"  {item.text[:200]}...")
             lines.append(f"  {item.url}")
             lines.append(f"  *{item.why_relevant}*")
+
+            # Thread context (from enrichment)
+            if item.thread_insight:
+                lines.append(f"  🧵 Thread: {item.thread_insight}")
+            if item.thread_replies:
+                lines.append(f"  Top replies:")
+                for reply in item.thread_replies[:3]:
+                    lines.append(f"    - {reply[:150]}")
+
             lines.append("")
 
     # Web items (if any - populated by Claude)
@@ -306,6 +315,15 @@ def render_full_report(report: schema.Report) -> str:
             lines.append(f"> {item.text}")
             lines.append("")
 
+            if item.thread_insight:
+                lines.append(f"**Thread Insight:** {item.thread_insight}")
+                lines.append("")
+            if item.thread_replies:
+                lines.append("**Top Replies:**")
+                for reply in item.thread_replies[:3]:
+                    lines.append(f"- {reply[:150]}")
+                lines.append("")
+
     # Web section
     if report.web:
         lines.append("## Web Results")
@@ -341,6 +359,7 @@ def write_outputs(
     raw_openai: Optional[dict] = None,
     raw_xai: Optional[dict] = None,
     raw_reddit_enriched: Optional[list] = None,
+    raw_x_enriched: Optional[list] = None,
 ):
     """Write all output files.
 
@@ -376,6 +395,10 @@ def write_outputs(
     if raw_reddit_enriched:
         with open(OUTPUT_DIR / "raw_reddit_threads_enriched.json", 'w') as f:
             json.dump(raw_reddit_enriched, f, indent=2)
+
+    if raw_x_enriched:
+        with open(OUTPUT_DIR / "raw_x_threads_enriched.json", 'w') as f:
+            json.dump(raw_x_enriched, f, indent=2)
 
 
 def get_context_path() -> str:

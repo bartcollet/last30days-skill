@@ -280,6 +280,22 @@ class ProgressDisplay:
         if self.spinner:
             self.spinner.stop(f"{Colors.CYAN}X{Colors.RESET} Found {count} posts")
 
+    def start_x_enrich(self, current: int, total: int):
+        if self.spinner:
+            self.spinner.stop()
+        msg = random.choice(ENRICHING_MESSAGES)
+        self.spinner = Spinner(f"{Colors.CYAN}X{Colors.RESET} [{current}/{total}] {msg}", Colors.CYAN)
+        self.spinner.start()
+
+    def update_x_enrich(self, current: int, total: int):
+        if self.spinner:
+            msg = random.choice(ENRICHING_MESSAGES)
+            self.spinner.update(f"{Colors.CYAN}X{Colors.RESET} [{current}/{total}] {msg}")
+
+    def end_x_enrich(self):
+        if self.spinner:
+            self.spinner.stop(f"{Colors.CYAN}X{Colors.RESET} Enriched with thread context")
+
     def start_processing(self):
         msg = random.choice(PROCESSING_MESSAGES)
         self.spinner = Spinner(f"{Colors.PURPLE}Processing{Colors.RESET} {msg}", Colors.PURPLE)

@@ -56,6 +56,46 @@ This text MUST appear before you call any tools. It confirms to the user that yo
 
 ---
 
+## Query Understanding Check
+
+After parsing intent, the Python script outputs `### QUERY PARSED ###` markers with structured data on stderr. Use these to decide whether to coach the user.
+
+### For clear, specific queries (proceed automatically):
+If the topic has 2+ specific words, a clear target tool, or an already-narrowed scope:
+```
+📋 Understood: researching "{TOPIC}" ({QUERY_TYPE})
+   Searching Reddit, X, and Web...
+```
+
+### For vague or overly broad queries (suggest refinements):
+**Coaching triggers:**
+1. **Too broad** — single generic word: "AI", "tools", "coding" → suggest adding context (e.g., "AI for what? Image generation? Code assistants? Agents?")
+2. **Ambiguous** — could mean multiple things: "Claude skills" → Claude Code skills vs Anthropic Claude capabilities?
+3. **Missing use case** — RECOMMENDATIONS type without context: "best AI tools" → for what purpose?
+4. **Overly long** — 10+ words often contain noise: suggest distilling to core subject
+
+```
+📋 Here's what I understood:
+   Topic: "{TOPIC}"
+   Type: {QUERY_TYPE}
+   Tool: {TARGET_TOOL or "not specified"}
+
+⚠️  This query could be sharpened:
+   • [Specific suggestion based on the issue]
+   • [Alternative interpretation if ambiguous]
+
+Refine your query, or press Enter to continue as-is.
+```
+
+**Coaching should NOT trigger for:**
+- Queries with 2-4 specific words ("Remotion video rendering")
+- Queries with a clear target tool ("image prompts for Midjourney")
+- Queries that are already narrowed ("best React server component patterns 2026")
+
+**If `--no-coach` was passed, skip this section entirely.**
+
+---
+
 ## Research Execution
 
 **Step 1: Run the research script**

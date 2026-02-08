@@ -121,9 +121,13 @@ class XItem:
     why_relevant: str = ""
     subs: SubScores = field(default_factory=SubScores)
     score: int = 0
+    # Thread enrichment fields
+    thread_replies: List[str] = field(default_factory=list)
+    thread_insight: str = ""
+    is_thread_head: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             'id': self.id,
             'text': self.text,
             'url': self.url,
@@ -136,6 +140,13 @@ class XItem:
             'subs': self.subs.to_dict(),
             'score': self.score,
         }
+        if self.thread_replies:
+            d['thread_replies'] = self.thread_replies
+        if self.thread_insight:
+            d['thread_insight'] = self.thread_insight
+        if self.is_thread_head:
+            d['is_thread_head'] = self.is_thread_head
+        return d
 
 
 @dataclass
@@ -274,6 +285,9 @@ class Report:
                 why_relevant=x.get('why_relevant', ''),
                 subs=subs,
                 score=x.get('score', 0),
+                thread_replies=x.get('thread_replies', []),
+                thread_insight=x.get('thread_insight', ''),
+                is_thread_head=x.get('is_thread_head', False),
             ))
 
         # Reconstruct Web items

@@ -1,0 +1,22 @@
+{
+  "id": "resp_mock_thread_001",
+  "object": "response",
+  "model": "grok-4-1-fast",
+  "error": null,
+  "output": [
+    {
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "Based on the X post and its replies, here is the thread analysis:\n\n```json\n{\n  \"is_thread_head\": true,\n  \"thread_insight\": \"Discussion about emerging AI coding tools with strong opinions on which provides the best developer experience\",\n  \"replies\": [\n    \"This is exactly what I've been looking for. The autocomplete alone saves me 2 hours a day.\",\n    \"Tried it for a week - the context window handling is genuinely impressive compared to alternatives.\",\n    \"Hot take: the free tier is more capable than most paid tools. The community extensions are what make it.\",\n    \"Been using this since beta. The thread-following feature changed how I debug complex issues.\",\n    \"Interesting but I still prefer the VS Code integration on the other tool. Different strokes.\"\n  ]\n}\n```"
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": 150,
+    "output_tokens": 200
+  }
+}

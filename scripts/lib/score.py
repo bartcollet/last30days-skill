@@ -216,6 +216,10 @@ def score_x_items(items: List[schema.XItem]) -> List[schema.XItem]:
         elif item.date_confidence == "med":
             overall -= 2
 
+        # Bonus for thread enrichment (indicates substantive conversation)
+        if item.thread_replies:
+            overall += 5
+
         item.score = max(0, min(100, int(overall)))
 
     return items
