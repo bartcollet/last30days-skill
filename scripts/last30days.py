@@ -287,7 +287,7 @@ def run_research(
 
                 try:
                     xai_key = config.get("XAI_API_KEY", "mock")
-                    xai_model = selected_models.get("xai", "grok-3-mini")
+                    xai_model = selected_models.get("xai", "grok-4-1-fast")
                     if mock:
                         mock_thread = load_fixture("xai_thread_sample.json")
                         x_items[idx] = x_enrich.enrich_x_item(

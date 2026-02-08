@@ -129,7 +129,7 @@ def parse_thread_response(response: Dict[str, Any]) -> Dict[str, Any]:
     """
     empty = {"thread_replies": [], "thread_insight": "", "is_thread_head": False}
 
-    if not response or "error" in response:
+    if not response or (response.get("error") is not None and response["error"]):
         return empty
 
     # Extract output text (same pattern as xai_x.py)
