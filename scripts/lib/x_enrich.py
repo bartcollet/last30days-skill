@@ -90,7 +90,7 @@ def fetch_thread(
     }
 
     try:
-        return http.post(XAI_RESPONSES_URL, payload, headers=headers, timeout=60)
+        return http.post(XAI_RESPONSES_URL, payload, headers=headers, timeout=20, retries=1)
     except http.HTTPError as e:
         _log_error(f"Thread fetch failed for {url}: {e}")
         return None

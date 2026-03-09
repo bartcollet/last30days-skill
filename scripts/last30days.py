@@ -458,6 +458,10 @@ def run_research(
             x_items.extend(sup_x)
 
     # Enrich X items with thread context (sequential, with error handling per-item)
+    # Global budget: 90s total for all X enrichment to prevent runaway hangs
+    import time as _time
+    x_enrich_deadline = _time.monotonic() + 90
+
     if x_items and (config.get("XAI_API_KEY") or mock):
         enrichable = [i for i, item in enumerate(x_items) if x_enrich.should_enrich(item)]
 
@@ -466,6 +470,12 @@ def run_research(
                 progress.start_x_enrich(1, len(enrichable))
 
             for count, idx in enumerate(enrichable):
+                if _time.monotonic() > x_enrich_deadline:
+                    remaining = len(enrichable) - count
+                    sys.stderr.write(f"[X-ENRICH] Budget exceeded, skipping {remaining} remaining posts\n")
+                    sys.stderr.flush()
+                    break
+
                 if progress and count > 0:
                     progress.update_x_enrich(count + 1, len(enrichable))
 
