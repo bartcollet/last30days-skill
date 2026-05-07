@@ -17,6 +17,7 @@ Options:
 import argparse
 import json
 import os
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -514,9 +515,21 @@ def main():
     parser.add_argument("--mock", action="store_true", help="Use fixtures")
     parser.add_argument(
         "--emit",
-        choices=["compact", "json", "md", "context", "path"],
+        choices=["compact", "json", "md", "context", "path", "html"],
         default="compact",
-        help="Output mode",
+        help="Output mode (html requires --synthesis-file)",
+    )
+    parser.add_argument(
+        "--synthesis-file",
+        type=str,
+        metavar="PATH",
+        help="Path to a markdown file with the synthesis content (for --emit=html)",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        metavar="PATH",
+        help="Output path for --emit=html (default: ~/Documents/Last30Days/<topic>-brief.html)",
     )
     parser.add_argument(
         "--sources",
@@ -583,6 +596,37 @@ def main():
         print("Error: Please provide a topic to research.", file=sys.stderr)
         print("Usage: python3 last30days.py <topic> [options]", file=sys.stderr)
         sys.exit(1)
+
+    # --emit=html: render a shareable HTML brief from a synthesis markdown file
+    # and exit. Bypasses the research engine; the fork's synthesis is produced
+    # by Claude in chat and passed in via --synthesis-file.
+    if args.emit == "html":
+        if not args.synthesis_file:
+            print(
+                "Error: --emit=html requires --synthesis-file=PATH (the markdown synthesis)",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        synthesis_path = os.path.expanduser(args.synthesis_file)
+        if not os.path.isfile(synthesis_path):
+            print(f"Error: synthesis file not found: {synthesis_path}", file=sys.stderr)
+            sys.exit(1)
+        with open(synthesis_path, "r", encoding="utf-8") as fh:
+            synthesis_md = fh.read()
+        from lib import html_render
+        html_doc = html_render.render_html(synthesis_md, topic=args.topic)
+        if args.output:
+            output_path = os.path.expanduser(args.output)
+        else:
+            slug = re.sub(r"[^a-z0-9]+", "-", args.topic.lower()).strip("-") or "brief"
+            output_dir = os.path.expanduser("~/Documents/Last30Days")
+            os.makedirs(output_dir, exist_ok=True)
+            output_path = os.path.join(output_dir, f"{slug}-brief.html")
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as fh:
+            fh.write(html_doc)
+        print(f"📎 Shareable brief saved to {output_path}")
+        sys.exit(0)
 
     # Query coaching: output parsed intent for Claude to consume
     if not args.no_coach:

@@ -554,3 +554,56 @@ After delivering a prompt, end with:
 
 Want another prompt? Just tell me what you're creating next.
 ```
+
+---
+
+## Shareable HTML brief (--emit=html)
+
+If the user asks for a "shareable brief", "HTML version", "PDF", "for Slack", or passes `--emit=html` / `--html`, save the synthesis as a self-contained HTML file after delivering it in chat.
+
+### When to trigger
+
+Detect from the original `$ARGUMENTS` or follow-up:
+- explicit flags: `--emit=html`, `--emit:html`, `--html`
+- natural language: "save as HTML", "shareable brief", "for Slack", "for email", "export to PDF" (HTML prints to PDF cleanly)
+
+If detected, after the synthesis is shown in chat, run the export step.
+
+### How
+
+The fork's HTML emit is a CLI bypass: it does NOT re-run the research engine. It takes the synthesis markdown you already produced and styles it as a stand-alone HTML document.
+
+```bash
+# 1. Capture the synthesis to a temp file (verbatim, the markdown shown to the user)
+SYNTH_FILE=$(mktemp -t last30days-synth.XXXX.md)
+cat > "$SYNTH_FILE" <<'EOF'
+[the exact synthesis markdown you sent to chat]
+EOF
+
+# 2. Render and save (defaults to ~/Documents/Last30Days/<slug>-brief.html)
+python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/last30days}/scripts/last30days.py" \
+  "$TOPIC" --emit=html --synthesis-file "$SYNTH_FILE"
+
+# 3. Optional: pass --output PATH to override the destination
+```
+
+The script prints `📎 Shareable brief saved to <path>`. Append that line to your chat reply so the user sees the file location.
+
+### What the brief contains
+
+- Topic badge + auto-generated date
+- Synthesis markdown converted to HTML (headings, lists, tables, code, blockquotes, links, bold)
+- Print stylesheet (browser-print to PDF works out of the box)
+- Dark mode default with `prefers-color-scheme: light` switch
+- Self-contained: inline CSS, no JavaScript, only Google Fonts (which fall back to system fonts offline)
+- Mobile breakpoint at 600px
+- Colophon with rerun command
+
+### MUST / MUST NOT
+
+- **MUST** capture the synthesis verbatim, including any inline markdown (do not re-render or summarise).
+- **MUST** clean up the temp file after the script returns (`rm "$SYNTH_FILE"`).
+- **MUST NOT** invoke `--emit=html` without `--synthesis-file`; the engine has no way to fabricate a synthesis.
+- **MUST NOT** put any debug logs, evidence blocks, or research stats into the synthesis file unless they belong in the shared artifact.
+
+See `references/save-html-brief.md` for a longer worked example.
