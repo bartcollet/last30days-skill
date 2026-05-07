@@ -2,6 +2,7 @@
 
 import json
 import os
+import ssl
 import sys
 import time
 import urllib.error
@@ -11,6 +12,33 @@ from urllib.parse import urlencode
 
 DEFAULT_TIMEOUT = 30
 DEBUG = os.environ.get("LAST30DAYS_DEBUG", "").lower() in ("1", "true", "yes")
+
+# Build a robust SSL context that uses certifi when the system certs are missing.
+# This fixes the common macOS issue where Python's default cert path doesn't exist.
+_ssl_context: ssl.SSLContext | None = None
+
+def _get_ssl_context() -> ssl.SSLContext:
+    """Return a cached SSL context with working root certificates."""
+    global _ssl_context
+    if _ssl_context is not None:
+        return _ssl_context
+
+    ctx = ssl.create_default_context()
+    # Test if the default context can actually verify anything
+    paths = ssl.get_default_verify_paths()
+    has_system_certs = (
+        (paths.cafile and os.path.exists(paths.cafile))
+        or (paths.capath and os.path.isdir(paths.capath))
+    )
+    if not has_system_certs:
+        try:
+            import certifi
+            ctx.load_verify_locations(certifi.where())
+            log("Using certifi certificates (system certs missing)")
+        except ImportError:
+            log("WARNING: No system certs and certifi not installed — SSL may fail")
+    _ssl_context = ctx
+    return _ssl_context
 
 
 def log(msg: str):
@@ -72,7 +100,7 @@ def request(
     last_error = None
     for attempt in range(retries):
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as response:
+            with urllib.request.urlopen(req, timeout=timeout, context=_get_ssl_context()) as response:
                 body = response.read().decode('utf-8')
                 log(f"Response: {response.status} ({len(body)} bytes)")
                 return json.loads(body) if body else {}
