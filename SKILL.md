@@ -1,8 +1,8 @@
 ---
 name: last30days
-description: Research a topic from the last 30 days on Reddit + X + Web, become an expert, and write copy-paste-ready prompts for the user's target tool.
+description: Use when asked to research a topic, 'what is trending in', 'latest on', 'what are people saying about', or '/last30days'. Searches Reddit + X + Web for the last 30 days.
 argument-hint: 'nano banana pro prompts, NVIDIA news, best AI video tools'
-allowed-tools: Bash, Read, Write, AskUserQuestion, WebSearch
+allowed-tools: Bash, Read, Write, AskUserQuestion, WebSearch, mcp__brave-search__brave_web_search, mcp__brave-search__brave_news_search, mcp__firecrawl__firecrawl_scrape
 ---
 
 # last30days: Research Any Topic from the Last 30 Days
@@ -110,59 +110,149 @@ The script will automatically:
 
 ---
 
-## STEP 2: DO WEBSEARCH WHILE SCRIPT RUNS
+## STEP 2: DO BRAVE SEARCH WHILE SCRIPT RUNS
 
-The script auto-detects sources (Bird CLI, API keys, etc). While waiting for it, do WebSearch.
+The script auto-detects sources (Bird CLI, API keys, etc). While waiting for it, search the web using **Brave Search MCP** (primary) with `WebSearch` as fallback.
 
-For **ALL modes**, do WebSearch to supplement (or provide all data in web-only mode).
+### Tool selection
 
-Choose search queries based on QUERY_TYPE:
+- **General/Recommendations/Prompting queries:** Use `mcp__brave-search__brave_web_search`
+- **NEWS queries:** Use `mcp__brave-search__brave_news_search`
+- **Fallback:** If Brave MCP is unavailable (error/timeout), fall back to `WebSearch` with the same queries
+
+### Brave parameters
+
+| Parameter | Value |
+|---|---|
+| `query` | See query patterns below |
+| `count` | `--quick`: 8, default: 15, `--deep`: 20 |
+| `freshness` | Map `--days=N`: 1d=`pd`, 7d=`pw`, 30d=`pm`, >31d=`py`. Default: `pm` |
+| `extra_snippets` | `true` (always) |
+
+**Field mapping:** Brave returns `description` where WebSearch returns `snippet`. This is already handled by `websearch.py:295`.
+
+### Query patterns by QUERY_TYPE
 
 **If RECOMMENDATIONS** ("best X", "top X", "what X should I use"):
-- Search for: `best {TOPIC} recommendations`
-- Search for: `{TOPIC} list examples`
-- Search for: `most popular {TOPIC}`
+- `best {TOPIC} recommendations`
+- `{TOPIC} list examples`
+- `most popular {TOPIC}`
 - Goal: Find SPECIFIC NAMES of things, not generic advice
 
 **If NEWS** ("what's happening with X", "X news"):
-- Search for: `{TOPIC} news 2026`
-- Search for: `{TOPIC} announcement update`
+- Use `brave_news_search` instead of `brave_web_search`
+- `{TOPIC} news`
+- `{TOPIC} announcement update`
 - Goal: Find current events and recent developments
 
 **If PROMPTING** ("X prompts", "prompting for X"):
-- Search for: `{TOPIC} prompts examples 2026`
-- Search for: `{TOPIC} techniques tips`
+- `{TOPIC} prompts examples 2026`
+- `{TOPIC} techniques tips`
 - Goal: Find prompting techniques and examples to create copy-paste prompts
 
 **If GENERAL** (default):
-- Search for: `{TOPIC} 2026`
-- Search for: `{TOPIC} discussion`
+- `{TOPIC} 2026`
+- `{TOPIC} discussion`
 - Goal: Find what people are actually saying
 
-For ALL query types:
-- **USE THE USER'S EXACT TERMINOLOGY** - don't substitute or add tech names based on your knowledge
+### Rules for ALL query types
+- **USE THE USER'S EXACT TERMINOLOGY** : don't substitute or add tech names based on your knowledge
 - EXCLUDE reddit.com, x.com, twitter.com (covered by script)
 - INCLUDE: blogs, tutorials, docs, news, GitHub repos
-- **DO NOT output "Sources:" list** - this is noise, we'll show stats at the end
+- **DO NOT output "Sources:" list** : this is noise, we'll show stats at the end
 
 **Options** (passed through from user's command):
-- `--days=N` → Look back N days instead of 30 (e.g., `--days=7` for weekly roundup)
-- `--quick` → Faster, fewer sources (8-12 each)
-- (default) → Balanced (20-30 each)
-- `--deep` → Comprehensive (50-70 Reddit, 40-60 X)
+- `--days=N` : Look back N days instead of 30 (e.g., `--days=7` for weekly roundup)
+- `--quick` : Faster, fewer sources (8-12 each)
+- (default) : Balanced (20-30 each)
+- `--deep` : Comprehensive (50-70 Reddit, 40-60 X)
+
+---
+
+## STEP 3: DEEP SCRAPE TOP RESULTS (Firecrawl)
+
+After Brave Search returns results, use `mcp__firecrawl__firecrawl_scrape` to fetch full content from the most promising URLs. This upgrades synthesis from snippet-level to full-content analysis.
+
+### When to scrape
+
+- **Default mode:** Scrape top 5 URLs from Brave results (most relevant by position)
+- **`--quick` mode:** Scrape top 3 URLs
+- **`--deep` mode:** Scrape top 8 URLs
+- **Skip scraping** if `--no-scrape` flag is passed
+
+### What to scrape
+
+Select URLs based on QUERY_TYPE relevance:
+
+| QUERY_TYPE | Prioritise |
+|---|---|
+| RECOMMENDATIONS | Product comparison blogs, review roundups, "best of" lists |
+| NEWS | News articles, announcement posts, press releases |
+| PROMPTING | Tutorials, technique guides, prompt libraries |
+| GENERAL | Discussion threads, blog posts, analysis pieces |
+
+**Skip:** Paywalled sites, PDFs, video-only pages, login-gated content. If a scrape fails or returns thin content (<200 chars), move to the next URL.
+
+### How to scrape
+
+```
+mcp__firecrawl__firecrawl_scrape({
+  "url": "<target_url>",
+  "formats": ["markdown"],
+  "onlyMainContent": true,
+  "waitFor": 2000
+})
+```
+
+- Use `markdown` format (feeds directly into synthesis)
+- `onlyMainContent: true` strips nav, footers, ads
+- Keep scraped content in memory for the Judge Agent; do not display raw scrapes to the user
+
+### Structured extraction (RECOMMENDATIONS only)
+
+For RECOMMENDATIONS queries, scrape the top 3 comparison/review pages with JSON extraction to auto-build a structured list:
+
+```
+mcp__firecrawl__firecrawl_scrape({
+  "url": "<comparison_page_url>",
+  "formats": ["extract"],
+  "extract": {
+    "prompt": "Extract all recommended {TOPIC} from this page",
+    "schema": {
+      "items": [{
+        "name": "string",
+        "description": "string (1 sentence)",
+        "price": "string or null",
+        "rating": "string or null",
+        "source_quote": "string (key quote about this item)"
+      }]
+    }
+  }
+})
+```
+
+Merge extracted items across pages; count cross-source mentions to rank by popularity.
+
+### Cost budget
+
+- ~2 credits per markdown scrape, ~5 credits per JSON extraction
+- Default run: 5 scrapes = ~10 credits
+- Deep run with extractions: 8 scrapes + 3 extractions = ~31 credits
 
 ---
 
 ## Judge Agent: Synthesize All Sources
 
-**After all searches complete, internally synthesize (don't display stats yet):**
+**After all searches and deep scrapes complete, internally synthesize (don't display stats yet):**
 
 The Judge Agent must:
 1. Weight Reddit/X sources HIGHER (they have engagement signals: upvotes, likes)
-2. Weight WebSearch sources LOWER (no engagement data)
-3. Identify patterns that appear across ALL three sources (strongest signals)
-4. Note any contradictions between sources
-5. Extract the top 3-5 actionable insights
+2. Weight **deep-scraped content** over snippet-only results (full context > preview)
+3. Weight snippet-only WebSearch sources LOWER (no engagement data, no full content)
+4. Identify patterns that appear across ALL sources (strongest signals)
+5. Note any contradictions between sources
+6. Extract the top 3-5 actionable insights
+7. **Use specific quotes, data points, and examples from scraped content** to support each insight (not just headline-level patterns)
 
 **Do NOT display stats here - they come at the end, right before the invitation.**
 
@@ -292,7 +382,8 @@ KEY PATTERNS from the research:
 ✅ All agents reported back!
 ├─ 🟠 Reddit: {N} threads │ {N} upvotes │ {N} comments
 ├─ 🔵 X: {N} posts │ {N} likes │ {N} reposts (via Bird/xAI)
-├─ 🌐 Web: {N} pages (supplementary)
+├─ 🌐 Brave: {N} pages (supplementary)
+├─ 🔥 Firecrawl: {N} pages deep-scraped │ {N} structured extractions
 └─ 🗣️ Top voices: @{handle1} ({N} likes), @{handle2} │ r/{sub1}, r/{sub2}
 ---
 ```
