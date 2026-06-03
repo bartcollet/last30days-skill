@@ -276,6 +276,13 @@ def search_subreddits(
         except Exception as e:
             _log_info(f"Subreddit search error for r/{sub}: {e}")
 
+    # Tier 1 fallback: the /search/.json endpoint now 403s even with a browser
+    # UA, so if it produced nothing, fall through to the keyless RSS feeds.
+    if not all_items:
+        from . import reddit_rss
+        _log_info("Subreddit .json search empty; falling back to keyless RSS")
+        all_items = reddit_rss.search_subreddits_rss(subreddits, core, count_per=count_per)
+
     return all_items
 
 

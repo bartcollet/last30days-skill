@@ -200,6 +200,47 @@ def get(url: str, headers: Optional[Dict[str, str]] = None, **kwargs) -> Dict[st
     return request("GET", url, headers=headers, **kwargs)
 
 
+def get_text(
+    url: str,
+    timeout: int = DEFAULT_TIMEOUT,
+    retries: int = 2,
+    accept: str = "*/*",
+    headers: Optional[Dict[str, str]] = None,
+) -> Optional[str]:
+    """Fetch a URL and return decoded text, or None on any failure.
+
+    Keyless helper for Reddit RSS and shreddit HTML endpoints — the free path
+    that replaced the now-403 ``.json`` endpoints. Sends a browser User-Agent,
+    decompresses gzip/deflate, and never raises: returns None on HTTP error,
+    network failure, or timeout so tiered callers fall through cleanly.
+    (Idea-ported from upstream 8d3a9e4's http.get_text.)
+    """
+    merged = dict(BROWSER_HEADERS)
+    merged["Accept"] = accept
+    if headers:
+        merged.update(headers)
+
+    req = urllib.request.Request(url, headers=merged, method="GET")
+    log(f"GET (text) {url}")
+
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout, context=_get_ssl_context()) as response:
+                return _decode_body(response)
+        except urllib.error.HTTPError as e:
+            log(f"get_text HTTP {e.code}: {e.reason} ({url})")
+            # Client errors (except rate limit) won't improve on retry.
+            if 400 <= e.code < 500 and e.code != 429:
+                return None
+            if attempt < retries - 1:
+                time.sleep(_backoff_delay(attempt))
+        except (urllib.error.URLError, OSError, TimeoutError) as e:
+            log(f"get_text network error: {type(e).__name__}: {e} ({url})")
+            if attempt < retries - 1:
+                time.sleep(_backoff_delay(attempt))
+    return None
+
+
 def post(url: str, json_data: Dict[str, Any], headers: Optional[Dict[str, str]] = None, **kwargs) -> Dict[str, Any]:
     """Make a POST request with JSON body."""
     return request("POST", url, headers=headers, json_data=json_data, **kwargs)

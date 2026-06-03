@@ -190,16 +190,16 @@ def enrich_reddit_item(
     """
     url = item.get("url", "")
 
-    # Fetch thread data
+    # Tier 0: the legacy {thread}.json path (still works for some IPs).
     thread_data = fetch_thread_data(url, mock_thread_data)
-    if not thread_data:
-        return item
+    submission = None
+    comments = []
+    if thread_data:
+        parsed = parse_thread_data(thread_data)
+        submission = parsed.get("submission")
+        comments = parsed.get("comments", [])
 
-    parsed = parse_thread_data(thread_data)
-    submission = parsed.get("submission")
-    comments = parsed.get("comments", [])
-
-    # Update engagement metrics
+    # Submission-level engagement is only available from the .json path.
     if submission:
         item["engagement"] = {
             "score": submission.get("score"),
@@ -212,21 +212,35 @@ def enrich_reddit_item(
         if created_utc:
             item["date"] = dates.timestamp_to_date(created_utc)
 
-    # Get top comments
-    top_comments = get_top_comments(comments)
-    item["top_comments"] = []
-    for c in top_comments:
-        permalink = c.get("permalink", "")
-        comment_url = f"https://reddit.com{permalink}" if permalink else ""
-        item["top_comments"].append({
-            "score": c.get("score", 0),
-            "date": dates.timestamp_to_date(c.get("created_utc")),
-            "author": c.get("author", ""),
-            "excerpt": c.get("body", "")[:200],
-            "url": comment_url,
-        })
+    if comments:
+        top_comments = get_top_comments(comments)
+        item["top_comments"] = []
+        for c in top_comments:
+            permalink = c.get("permalink", "")
+            comment_url = f"https://reddit.com{permalink}" if permalink else ""
+            item["top_comments"].append({
+                "score": c.get("score", 0),
+                "date": dates.timestamp_to_date(c.get("created_utc")),
+                "author": c.get("author", ""),
+                "excerpt": c.get("body", "")[:200],
+                "url": comment_url,
+            })
+        item["comment_insights"] = extract_comment_insights(top_comments)
+        return item
 
-    # Extract insights
-    item["comment_insights"] = extract_comment_insights(top_comments)
+    # Tier 2 fallback: .json gave no comments (now the common case — it 403s),
+    # so scrape the keyless shreddit comments endpoint. Skipped during mock runs
+    # (mock_thread_data drives the .json path deterministically in tests).
+    if mock_thread_data is None and url:
+        from . import reddit_shreddit
+        sh = reddit_shreddit.fetch_comments(url)
+        if sh["top_comments"] or sh["comment_insights"]:
+            item["top_comments"] = sh["top_comments"]
+            item["comment_insights"] = sh["comment_insights"]
+            if sh["num_comments"] is not None:
+                eng = item.setdefault("engagement", {})
+                eng.setdefault("score", None)
+                eng["num_comments"] = sh["num_comments"]
+                eng.setdefault("upvote_ratio", None)
 
     return item
