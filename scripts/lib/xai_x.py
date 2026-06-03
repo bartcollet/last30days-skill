@@ -5,7 +5,7 @@ import re
 import sys
 from typing import Any, Dict, List, Optional
 
-from . import http
+from . import coerce, http
 
 
 def _log_error(msg: str):
@@ -117,15 +117,26 @@ def search_x(
 def parse_x_response(response: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Parse xAI response to extract X items.
 
+    A 200 OK with a malformed payload (empty/missing output text, no items JSON,
+    or invalid JSON) is NOT silently treated as "zero results" — that hands the
+    user a degraded report with no signal that X failed. Those branches raise
+    ``http.HTTPError`` so the caller records the failure in its per-source error
+    map. A genuinely empty ``items`` list (the API parsed fine, found nothing)
+    returns ``[]`` without raising. (Idea-ported from upstream d51e91e.)
+
     Args:
         response: Raw API response
 
     Returns:
         List of item dicts
+
+    Raises:
+        http.HTTPError: when a success-shaped response can't be parsed at all.
     """
     items = []
 
-    # Check for API errors first
+    # Explicit API error dict (also the shape _search_x builds after catching an
+    # exception): the failure is already recorded upstream, so return empty.
     if "error" in response and response["error"]:
         error = response["error"]
         err_msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
@@ -164,16 +175,19 @@ def parse_x_response(response: Dict[str, Any]) -> List[Dict[str, Any]]:
                 break
 
     if not output_text:
-        return items
+        raise http.HTTPError("xAI returned a 200 with no output text (API likely failed)")
 
     # Extract JSON from the response
     json_match = re.search(r'\{[\s\S]*"items"[\s\S]*\}', output_text)
-    if json_match:
-        try:
-            data = json.loads(json_match.group())
-            items = data.get("items", [])
-        except json.JSONDecodeError:
-            pass
+    if not json_match:
+        raise http.HTTPError("xAI output contained no parseable items JSON")
+    try:
+        data = json.loads(json_match.group())
+    except json.JSONDecodeError as e:
+        raise http.HTTPError(f"xAI output was not valid JSON: {e}")
+    if "items" not in data:
+        raise http.HTTPError("xAI output JSON missing 'items' key")
+    items = data.get("items") or []
 
     # Validate and clean items
     clean_items = []
@@ -185,15 +199,15 @@ def parse_x_response(response: Dict[str, Any]) -> List[Dict[str, Any]]:
         if not url:
             continue
 
-        # Parse engagement
+        # Parse engagement (coerce defensively: "1.2k", None, "" all tolerated)
         engagement = None
         eng_raw = item.get("engagement")
         if isinstance(eng_raw, dict):
             engagement = {
-                "likes": int(eng_raw.get("likes", 0)) if eng_raw.get("likes") else None,
-                "reposts": int(eng_raw.get("reposts", 0)) if eng_raw.get("reposts") else None,
-                "replies": int(eng_raw.get("replies", 0)) if eng_raw.get("replies") else None,
-                "quotes": int(eng_raw.get("quotes", 0)) if eng_raw.get("quotes") else None,
+                "likes": coerce.coerce_int(eng_raw.get("likes")),
+                "reposts": coerce.coerce_int(eng_raw.get("reposts")),
+                "replies": coerce.coerce_int(eng_raw.get("replies")),
+                "quotes": coerce.coerce_int(eng_raw.get("quotes")),
             }
 
         clean_item = {
@@ -204,7 +218,7 @@ def parse_x_response(response: Dict[str, Any]) -> List[Dict[str, Any]]:
             "date": item.get("date"),
             "engagement": engagement,
             "why_relevant": str(item.get("why_relevant", "")).strip(),
-            "relevance": min(1.0, max(0.0, float(item.get("relevance", 0.5)))),
+            "relevance": coerce.coerce_relevance(item.get("relevance")),
         }
 
         # Validate date format

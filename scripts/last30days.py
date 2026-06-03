@@ -203,7 +203,14 @@ def _search_x(
         raw_response = {"error": str(e)}
         x_error = f"{type(e).__name__}: {e}"
 
-    x_items = xai_x.parse_x_response(raw_response or {})
+    # parse_x_response raises on a 200 it can't parse at all (degraded API);
+    # catch so the failure surfaces as x_error instead of a silent empty result.
+    try:
+        x_items = xai_x.parse_x_response(raw_response or {})
+    except http.HTTPError as e:
+        x_items = []
+        if not x_error:
+            x_error = f"parse error: {e}"
 
     return x_items, raw_response, x_error
 

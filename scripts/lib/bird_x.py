@@ -4,8 +4,11 @@ import json
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
+
+from . import coerce
 
 # Depth configurations: number of results to request
 DEPTH_CONFIG = {
@@ -163,13 +166,21 @@ def get_bird_status() -> Dict[str, Any]:
     }
 
 
-def _run_bird_search(query: str, count: int, timeout: int) -> Dict[str, Any]:
+def _run_bird_search(query: str, count: int, timeout: int, _json_retries: int = 1) -> Dict[str, Any]:
     """Run a single Bird CLI search and return raw response.
+
+    Twitter's edge intermittently serves an HTML anti-bot interstitial instead
+    of JSON when the subprocess hits a per-query rate limit. That makes
+    json.loads raise, which is indistinguishable from "no tweets matched" to the
+    caller. Retry the subprocess once (with a short pause) on non-JSON stdout so
+    a transient interstitial doesn't silent-empty a whole X sweep.
+    (Idea-ported from upstream a717dd2.)
 
     Args:
         query: Full search query string (including since: filter)
         count: Number of results to request
         timeout: Timeout in seconds
+        _json_retries: Remaining retries on non-JSON stdout (internal).
 
     Returns:
         Raw Bird JSON response or error dict.
@@ -197,12 +208,17 @@ def _run_bird_search(query: str, count: int, timeout: int) -> Dict[str, Any]:
         if not output:
             return {"items": []}
 
-        return json.loads(output)
+        try:
+            return json.loads(output)
+        except json.JSONDecodeError as e:
+            if _json_retries > 0:
+                _log("Non-JSON stdout (likely HTML interstitial); retrying once")
+                time.sleep(2)
+                return _run_bird_search(query, count, timeout, _json_retries - 1)
+            return {"error": f"Invalid JSON response: {e}", "items": []}
 
     except subprocess.TimeoutExpired:
         return {"error": "Search timed out", "items": []}
-    except json.JSONDecodeError as e:
-        return {"error": f"Invalid JSON response: {e}", "items": []}
     except Exception as e:
         return {"error": str(e), "items": []}
 
@@ -371,19 +387,13 @@ def parse_bird_response(response: Dict[str, Any]) -> List[Dict[str, Any]]:
         author_handle = author.get("username") or author.get("screen_name", "") or tweet.get("author_handle", "")
 
         # Build engagement dict (Bird uses camelCase: likeCount, retweetCount, etc.)
+        # coerce_int tolerates None, numeric strings, and abbreviated counts ("1.2k").
         engagement = {
-            "likes": tweet.get("likeCount") or tweet.get("like_count") or tweet.get("favorite_count"),
-            "reposts": tweet.get("retweetCount") or tweet.get("retweet_count"),
-            "replies": tweet.get("replyCount") or tweet.get("reply_count"),
-            "quotes": tweet.get("quoteCount") or tweet.get("quote_count"),
+            "likes": coerce.coerce_int(tweet.get("likeCount") or tweet.get("like_count") or tweet.get("favorite_count")),
+            "reposts": coerce.coerce_int(tweet.get("retweetCount") or tweet.get("retweet_count")),
+            "replies": coerce.coerce_int(tweet.get("replyCount") or tweet.get("reply_count")),
+            "quotes": coerce.coerce_int(tweet.get("quoteCount") or tweet.get("quote_count")),
         }
-        # Convert to int where possible
-        for key in engagement:
-            if engagement[key] is not None:
-                try:
-                    engagement[key] = int(engagement[key])
-                except (ValueError, TypeError):
-                    engagement[key] = None
 
         # Build normalized item
         item = {

@@ -1,5 +1,6 @@
 """HTTP utilities for last30days skill (stdlib only)."""
 
+import gzip
 import json
 import os
 import ssl
@@ -7,6 +8,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import zlib
 from typing import Any, Dict, Optional
 from urllib.parse import urlencode
 
@@ -48,7 +50,58 @@ def log(msg: str):
         sys.stderr.flush()
 MAX_RETRIES = 3
 RETRY_DELAY = 1.0
+MAX_RETRY_DELAY = 30.0  # cap exponential backoff so a flaky host can't stall for minutes
 USER_AGENT = "last30days-skill/2.0 (Claude Code Skill)"
+
+# A current-Chrome fingerprint. Reddit's public JSON/RSS endpoints return 403 to
+# the generic urllib User-Agent + minimal header set, while matching browser
+# requests succeed. Used for keyless Reddit fetches; the API clients keep their
+# Bearer-auth header sets. (Idea-ported from upstream 4bae05e / 8d3a9e4.)
+BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate",
+    "Connection": "keep-alive",
+}
+
+
+def _decode_body(response) -> str:
+    """Read an HTTP response body, transparently decompressing gzip/deflate.
+
+    Browser-like requests advertise ``Accept-Encoding: gzip, deflate`` so hosts
+    (Reddit in particular) may return a compressed body that plain
+    ``.decode('utf-8')`` would choke on.
+    """
+    raw = response.read()
+    encoding = (response.headers.get("Content-Encoding") or "").lower()
+    if "gzip" in encoding:
+        try:
+            raw = gzip.decompress(raw)
+        except (OSError, EOFError):
+            pass
+    elif "deflate" in encoding:
+        try:
+            raw = zlib.decompress(raw)
+        except zlib.error:
+            try:
+                raw = zlib.decompress(raw, -zlib.MAX_WBITS)  # raw deflate, no header
+            except zlib.error:
+                pass
+    return raw.decode("utf-8", errors="replace")
+
+
+def _backoff_delay(attempt: int) -> float:
+    """Exponential backoff (1s, 2s, 4s, ...) capped at MAX_RETRY_DELAY.
+
+    Linear backoff exhausts a small retry budget too quickly against a flaky
+    resolver/edge; exponential gives the transient condition more room to clear
+    without stalling indefinitely. (Idea-ported from upstream 5a2fe52.)
+    """
+    return min(RETRY_DELAY * (2 ** attempt), MAX_RETRY_DELAY)
 
 
 class HTTPError(Exception):
@@ -101,14 +154,14 @@ def request(
     for attempt in range(retries):
         try:
             with urllib.request.urlopen(req, timeout=timeout, context=_get_ssl_context()) as response:
-                body = response.read().decode('utf-8')
+                body = _decode_body(response)
                 log(f"Response: {response.status} ({len(body)} bytes)")
                 return json.loads(body) if body else {}
         except urllib.error.HTTPError as e:
             body = None
             try:
-                body = e.read().decode('utf-8')
-            except:
+                body = e.read().decode('utf-8', errors='replace')
+            except Exception:
                 pass
             log(f"HTTP Error {e.code}: {e.reason}")
             if body:
@@ -120,12 +173,12 @@ def request(
                 raise last_error
 
             if attempt < retries - 1:
-                time.sleep(RETRY_DELAY * (attempt + 1))
+                time.sleep(_backoff_delay(attempt))
         except urllib.error.URLError as e:
             log(f"URL Error: {e.reason}")
             last_error = HTTPError(f"URL Error: {e.reason}")
             if attempt < retries - 1:
-                time.sleep(RETRY_DELAY * (attempt + 1))
+                time.sleep(_backoff_delay(attempt))
         except json.JSONDecodeError as e:
             log(f"JSON decode error: {e}")
             last_error = HTTPError(f"Invalid JSON response: {e}")
@@ -135,7 +188,7 @@ def request(
             log(f"Connection error: {type(e).__name__}: {e}")
             last_error = HTTPError(f"Connection error: {type(e).__name__}: {e}")
             if attempt < retries - 1:
-                time.sleep(RETRY_DELAY * (attempt + 1))
+                time.sleep(_backoff_delay(attempt))
 
     if last_error:
         raise last_error
@@ -172,9 +225,8 @@ def get_reddit_json(path: str) -> Dict[str, Any]:
 
     url = f"https://www.reddit.com{path}?raw_json=1"
 
-    headers = {
-        "User-Agent": USER_AGENT,
-        "Accept": "application/json",
-    }
+    # Reddit 403s the generic UA; use a browser fingerprint (see BROWSER_HEADERS).
+    headers = dict(BROWSER_HEADERS)
+    headers["Accept"] = "application/json"
 
     return get(url, headers=headers)

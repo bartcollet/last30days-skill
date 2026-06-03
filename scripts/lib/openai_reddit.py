@@ -5,10 +5,13 @@ import re
 import sys
 from typing import Any, Dict, List, Optional
 
-from . import http
+from . import coerce, http
 
 # Fallback models when the selected model isn't accessible (e.g., org not verified for GPT-5)
 MODEL_FALLBACK_ORDER = ["gpt-4.1", "gpt-4o", "gpt-4o-mini"]
+
+# Local alias so the parse loop reads cleanly.
+_coerce_relevance = coerce.coerce_relevance
 
 
 def _log_error(msg: str):
@@ -226,16 +229,17 @@ def search_subreddits(
     core = _extract_core_subject(topic)
 
     for sub in subreddits:
-        sub = sub.lstrip("r/")
+        # removeprefix, NOT lstrip: lstrip("r/") strips ANY leading r/ chars, so
+        # "rust" -> "ust" and "robotics" -> "obotics". (Idea-ported from 5994b4f.)
+        sub = sub.removeprefix("r/")
         try:
             url = f"https://www.reddit.com/r/{sub}/search/.json"
             params = f"q={_url_encode(core)}&restrict_sr=on&sort=new&limit={count_per}&raw_json=1"
             full_url = f"{url}?{params}"
 
-            headers = {
-                "User-Agent": http.USER_AGENT,
-                "Accept": "application/json",
-            }
+            # Reddit 403s the generic UA; use a browser fingerprint.
+            headers = dict(http.BROWSER_HEADERS)
+            headers["Accept"] = "application/json"
 
             data = http.get(full_url, headers=headers, timeout=15)
 
@@ -357,10 +361,10 @@ def parse_reddit_response(response: Dict[str, Any]) -> List[Dict[str, Any]]:
             "id": f"R{i+1}",
             "title": str(item.get("title", "")).strip(),
             "url": url,
-            "subreddit": str(item.get("subreddit", "")).strip().lstrip("r/"),
+            "subreddit": str(item.get("subreddit", "")).strip().removeprefix("r/"),
             "date": item.get("date"),
             "why_relevant": str(item.get("why_relevant", "")).strip(),
-            "relevance": min(1.0, max(0.0, float(item.get("relevance", 0.5)))),
+            "relevance": _coerce_relevance(item.get("relevance")),
         }
 
         # Validate date format

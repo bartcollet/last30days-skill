@@ -84,7 +84,9 @@ class TestSelectXAIModel(unittest.TestCase):
             "fake-key",
             policy="latest"
         )
-        self.assertEqual(result, "grok-4-latest")
+        # Track the alias map rather than a hardcoded string so this doesn't
+        # drift every time the required x_search model changes.
+        self.assertEqual(result, models.XAI_ALIASES["latest"])
 
     def test_stable_policy(self):
         # Clear cache first to avoid interference
@@ -94,7 +96,7 @@ class TestSelectXAIModel(unittest.TestCase):
             "fake-key",
             policy="stable"
         )
-        self.assertEqual(result, "grok-4")
+        self.assertEqual(result, models.XAI_ALIASES["stable"])
 
     def test_pinned_policy(self):
         result = models.select_xai_model(
@@ -128,7 +130,8 @@ class TestGetModels(unittest.TestCase):
         mock_xai = [{"id": "grok-4-latest", "created": 1704067200}]
         result = models.get_models(config, mock_openai, mock_xai)
         self.assertEqual(result["openai"], "gpt-5.2")
-        self.assertEqual(result["xai"], "grok-4-latest")
+        # Default xAI policy is "latest", which resolves via the alias map.
+        self.assertEqual(result["xai"], models.XAI_ALIASES["latest"])
 
 
 if __name__ == "__main__":
