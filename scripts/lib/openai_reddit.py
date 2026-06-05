@@ -187,7 +187,12 @@ def search_reddit(
         }
 
         try:
-            return http.post(OPENAI_RESPONSES_URL, payload, headers=headers, timeout=timeout)
+            # retries=1: web_search is already given a generous per-call timeout
+            # (90-180s). Retrying a *timed-out* domain-restricted web_search just
+            # multiplies the wait (3 x 120s = 360s) without improving the odds —
+            # a hung search stays hung. Cap it at a single attempt so one slow
+            # query can't blow the whole Reddit phase past the outer time budget.
+            return http.post(OPENAI_RESPONSES_URL, payload, headers=headers, timeout=timeout, retries=1)
         except http.HTTPError as e:
             last_error = e
             if _is_model_access_error(e):

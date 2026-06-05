@@ -103,6 +103,8 @@ Refine your query, or press Enter to continue as-is.
 python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/last30days}/scripts/last30days.py" "$ARGUMENTS" --emit=compact 2>&1
 ```
 
+**IMPORTANT — set the Bash tool `timeout` to 480000 (8 min) for this call** (600000 / 10 min for `--deep`). The default 120s Bash timeout is shorter than the Reddit phase can legitimately take (Reddit discovery runs through OpenAI `web_search`, which is slow and variable), so leaving it at the default kills the script mid-run and surfaces as a spurious "Reddit timed out". The script has its own internal per-source budgets, so a generous Bash timeout will not cause it to hang.
+
 The script will automatically:
 - Detect available API keys
 - Run Reddit/X searches if keys exist

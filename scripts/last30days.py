@@ -429,11 +429,24 @@ def run_research(
                 progress.end_x(len(x_items))
 
     # Enrich Reddit items with real data (sequential, but with error handling per-item)
+    # Global budget: 90s total for all Reddit enrichment to prevent runaway hangs.
+    # Each item does a .json hit (now a fast 403) then a shreddit scrape (up to
+    # 12s x 2 retries), so a long item list could otherwise stall for minutes.
+    # Mirrors the X-enrich budget below.
+    import time as _time
+    reddit_enrich_deadline = _time.monotonic() + 90
+
     if reddit_items:
         if progress:
             progress.start_reddit_enrich(1, len(reddit_items))
 
         for i, item in enumerate(reddit_items):
+            if _time.monotonic() > reddit_enrich_deadline:
+                remaining = len(reddit_items) - i
+                sys.stderr.write(f"[REDDIT-ENRICH] Budget exceeded, skipping {remaining} remaining threads\n")
+                sys.stderr.flush()
+                break
+
             if progress and i > 0:
                 progress.update_reddit_enrich(i + 1, len(reddit_items))
 
@@ -467,7 +480,7 @@ def run_research(
 
     # Enrich X items with thread context (sequential, with error handling per-item)
     # Global budget: 90s total for all X enrichment to prevent runaway hangs
-    import time as _time
+    # (_time imported above for the Reddit-enrich budget).
     x_enrich_deadline = _time.monotonic() + 90
 
     if x_items and (config.get("XAI_API_KEY") or mock):
