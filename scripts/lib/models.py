@@ -7,7 +7,17 @@ from . import cache, http
 
 # OpenAI API
 OPENAI_MODELS_URL = "https://api.openai.com/v1/models"
-OPENAI_FALLBACK_MODELS = ["gpt-5.2", "gpt-5.1", "gpt-5", "gpt-4.1", "gpt-4o"]
+OPENAI_FALLBACK_MODELS = ["gpt-4.1", "gpt-4o", "gpt-5.2", "gpt-5.1", "gpt-5"]
+
+# The ONLY OpenAI call in this skill is the Reddit web_search discovery+extract
+# task. That task wants fast + cheap, NOT frontier reasoning: gpt-4.1 returns 10
+# threads in ~9s, whereas the newest reasoning-tier model (e.g. gpt-5.5) times
+# out at the 90s web_search budget and costs far more per call. So under `auto`
+# we PREFER these search-appropriate models over "whatever has the highest
+# version number" — otherwise auto silently escalates (and gets slower + pricier)
+# every time the account gains access to a newer reasoning model. Explicit pins
+# (OPENAI_MODEL_POLICY=pinned + OPENAI_MODEL_PIN) still override this.
+OPENAI_SEARCH_PREFERRED = ["gpt-4.1", "gpt-4o"]
 
 # xAI API - Agent Tools API requires grok-4 family
 XAI_MODELS_URL = "https://api.x.ai/v1/models"
@@ -99,7 +109,15 @@ def select_openai_model(
         return (version, created)
 
     candidates.sort(key=sort_key, reverse=True)
-    selected = candidates[0]["id"]
+
+    # Prefer a fast, cheap search-appropriate model (gpt-4.1 > gpt-4o) when the
+    # account has access to one; only fall back to the version-sorted newest
+    # (which would be a slow/expensive reasoning model) if none are available.
+    candidate_ids = {m.get("id", "") for m in candidates}
+    selected = next(
+        (pref for pref in OPENAI_SEARCH_PREFERRED if pref in candidate_ids),
+        candidates[0]["id"],
+    )
 
     # Cache the selection
     cache.set_cached_model("openai", selected)
