@@ -1,13 +1,38 @@
 """Tests for models module."""
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 # Add lib to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
-from lib import models
+from lib import cache, models
+
+
+class CacheIsolatedTestCase(unittest.TestCase):
+    """Base case that redirects the persistent model-selection cache to a
+    temp file per test.
+
+    ``models.select_openai_model`` / ``select_xai_model`` short-circuit on
+    ``cache.MODEL_CACHE_FILE`` (default ``~/.cache/last30days/model_selection.json``).
+    Without isolation, a real `/last30days` run (or another test) that cached
+    e.g. ``gpt-4.1`` poisons the auto-selection assertions here, making them
+    flaky. Redirecting the cache also stops tests from clobbering the user's
+    real cache.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self._orig_cache_file = cache.MODEL_CACHE_FILE
+        self._tmpdir = tempfile.TemporaryDirectory()
+        cache.MODEL_CACHE_FILE = Path(self._tmpdir.name) / "model_selection.json"
+
+    def tearDown(self):
+        cache.MODEL_CACHE_FILE = self._orig_cache_file
+        self._tmpdir.cleanup()
+        super().tearDown()
 
 
 class TestParseVersion(unittest.TestCase):
@@ -42,7 +67,7 @@ class TestIsMainlineOpenAIModel(unittest.TestCase):
         self.assertFalse(models.is_mainline_openai_model("gpt-4"))
 
 
-class TestSelectOpenAIModel(unittest.TestCase):
+class TestSelectOpenAIModel(CacheIsolatedTestCase):
     def test_pinned_policy(self):
         result = models.select_openai_model(
             "fake-key",
@@ -78,7 +103,7 @@ class TestSelectOpenAIModel(unittest.TestCase):
         self.assertEqual(result, "gpt-5.2")
 
 
-class TestSelectXAIModel(unittest.TestCase):
+class TestSelectXAIModel(CacheIsolatedTestCase):
     def test_latest_policy(self):
         result = models.select_xai_model(
             "fake-key",
@@ -89,9 +114,7 @@ class TestSelectXAIModel(unittest.TestCase):
         self.assertEqual(result, models.XAI_ALIASES["latest"])
 
     def test_stable_policy(self):
-        # Clear cache first to avoid interference
-        from lib import cache
-        cache.MODEL_CACHE_FILE.unlink(missing_ok=True)
+        # Cache is isolated per-test via CacheIsolatedTestCase.
         result = models.select_xai_model(
             "fake-key",
             policy="stable"
@@ -107,7 +130,7 @@ class TestSelectXAIModel(unittest.TestCase):
         self.assertEqual(result, "grok-3")
 
 
-class TestGetModels(unittest.TestCase):
+class TestGetModels(CacheIsolatedTestCase):
     def test_no_keys_returns_none(self):
         config = {}
         result = models.get_models(config)
