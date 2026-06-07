@@ -310,7 +310,8 @@ def render_compact(report: schema.Report, limit: int = 15, missing_keys: str = "
                 for pair in item.outcome_prices[:3]:
                     try:
                         name, price = pair[0], float(pair[1])
-                        odds_parts.append(f"{name}: {price * 100:.0f}%")
+                        disp = name if len(name) <= 42 else name[:41].rstrip() + "…"
+                        odds_parts.append(f"{disp}: {price * 100:.0f}%")
                     except (IndexError, TypeError, ValueError):
                         continue
                 if odds_parts:

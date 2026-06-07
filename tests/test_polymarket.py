@@ -95,6 +95,45 @@ class TestShortenQuestion(unittest.TestCase):
             self.assertNotIn(label.lower(), polymarket._GENERIC_LABEL_TOKENS)
 
 
+class TestElideCommonAffixes(unittest.TestCase):
+    def test_strips_shared_prefix_and_suffix(self):
+        names = [
+            "Republican Party hold 47 or fewer Senate seats after the 2026 midterms",
+            "Republican Party hold exactly 51 Senate seats after the 2026 midterms",
+            "Republican Party hold exactly 50 Senate seats after the 2026 midterms",
+        ]
+        out = polymarket._elide_common_affixes(names)
+        self.assertEqual(out, ["47 or fewer", "exactly 51", "exactly 50"])
+
+    def test_strips_leading_article_bonus(self):
+        self.assertEqual(
+            polymarket._elide_common_affixes(["the Democrats", "the Republicans"]),
+            ["Democrats", "Republicans"],
+        )
+
+    def test_entity_names_pass_through(self):
+        names = ["Arizona", "Duke", "Kansas"]
+        self.assertEqual(polymarket._elide_common_affixes(names), names)
+
+    def test_yes_no_pass_through(self):
+        self.assertEqual(polymarket._elide_common_affixes(["Yes", "No"]), ["Yes", "No"])
+
+    def test_bails_out_rather_than_blanking(self):
+        # Identical labels would elide to empty -> keep originals.
+        names = ["same thing", "same thing"]
+        self.assertEqual(polymarket._elide_common_affixes(names), names)
+
+    def test_bails_out_rather_than_merging(self):
+        # Eliding the shared tail would collapse two distinct labels to "A".
+        names = ["A B", "A C", "A B"]  # distinct set {A B, A C}; suffix none, prefix "A"
+        out = polymarket._elide_common_affixes(names)
+        # prefix "A" stripped -> ["B","C","B"] still distinct set {B,C} == originals' {A B, A C}
+        self.assertEqual(out, ["B", "C", "B"])
+
+    def test_single_name_unchanged(self):
+        self.assertEqual(polymarket._elide_common_affixes(["solo"]), ["solo"])
+
+
 class TestNormalizeAndScorePolymarket(unittest.TestCase):
     def test_normalize_and_score(self):
         resp = {"events": [_event("2026 election control of Senate")], "_cap": 15}

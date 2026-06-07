@@ -503,12 +503,55 @@ def _shorten_question(question: str) -> str:
 
     # Fallback: drop a leading "Will (the|a|an)" and keep the distinguishing
     # remainder (the part that differs between sibling sub-markets, e.g. the
-    # seat count), truncated for display.
+    # seat count). Returned in full; sibling labels are then de-duplicated by
+    # _elide_common_affixes and truncated at display time.
     trimmed = re.sub(r"^Will\s+(?:the|a|an)\s+", "", q, flags=re.IGNORECASE)
     trimmed = re.sub(r"^Will\s+", "", trimmed, flags=re.IGNORECASE).strip()
-    if not trimmed:
-        trimmed = q
-    return (trimmed[:45].rstrip() + "…") if len(trimmed) > 45 else trimmed
+    return trimmed or q
+
+
+def _elide_common_affixes(names: List[str]) -> List[str]:
+    """Remove the word-sequence shared by ALL sibling outcome labels.
+
+    Enumerated markets phrase every outcome the same way except for the
+    distinguishing middle ("Republican Party hold **47 or fewer** Senate
+    seats after ..." vs "... hold **exactly 51** Senate seats after ...").
+    Stripping the common leading and trailing words leaves just the part that
+    differs ("47 or fewer" / "exactly 51"), so truncation no longer collapses
+    siblings to an identical prefix.
+
+    Conservative: bails out (returns the input unchanged) if elision would
+    empty any label or collapse two previously-distinct labels into one.
+    Entity markets ("Arizona" / "Duke") share no affix and pass through; a
+    shared leading article ("the Democrats" / "the Republicans") is stripped
+    as a bonus.
+    """
+    if len(names) < 2:
+        return names
+    tokenized = [n.split() for n in names]
+    if any(not toks for toks in tokenized):
+        return names
+
+    # Longest common leading run of words (case-insensitive).
+    pre = 0
+    while (all(len(t) > pre for t in tokenized)
+           and len({t[pre].lower() for t in tokenized}) == 1):
+        pre += 1
+    # Longest common trailing run, not overlapping the prefix.
+    suf = 0
+    while (all(len(t) > pre + suf for t in tokenized)
+           and len({t[-1 - suf].lower() for t in tokenized}) == 1):
+        suf += 1
+
+    if pre == 0 and suf == 0:
+        return names
+
+    elided = [" ".join(t[pre: len(t) - suf] if suf else t[pre:]) for t in tokenized]
+    if any(not e for e in elided):
+        return names  # would blank out a label — keep originals
+    if len({e.lower() for e in elided}) < len({n.lower() for n in names}):
+        return names  # would merge distinct labels — keep originals
+    return elided
 
 
 def _compute_text_similarity(topic: str, title: str, outcomes: List[str] = None) -> float:
@@ -753,6 +796,12 @@ def parse_polymarket_response(response: Dict[str, Any], topic: str = "") -> List
                     rest.append(pair)
             if reordered:
                 outcome_prices = reordered + rest
+
+        # Make sibling outcome labels distinguishing by removing the shared
+        # leading/trailing words (computed across ALL outcomes, before slicing).
+        if len(outcome_prices) > 1:
+            elided = _elide_common_affixes([n for n, _ in outcome_prices])
+            outcome_prices = [(name, p) for name, (_, p) in zip(elided, outcome_prices)]
 
         # Top 3 outcomes for multi-outcome markets
         top_outcomes = outcome_prices[:3]
