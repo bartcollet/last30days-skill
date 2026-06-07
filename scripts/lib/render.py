@@ -19,14 +19,20 @@ def _assess_data_freshness(report: schema.Report) -> dict:
     reddit_recent = sum(1 for r in report.reddit if r.date and r.date >= report.range_from)
     x_recent = sum(1 for x in report.x if x.date and x.date >= report.range_from)
     web_recent = sum(1 for w in report.web if w.date and w.date >= report.range_from)
+    hn_recent = sum(1 for h in report.hackernews if h.date and h.date >= report.range_from)
+    gh_recent = sum(1 for g in report.github if g.date and g.date >= report.range_from)
+    pm_recent = sum(1 for p in report.polymarket if p.date and p.date >= report.range_from)
 
-    total_recent = reddit_recent + x_recent + web_recent
-    total_items = len(report.reddit) + len(report.x) + len(report.web)
+    total_recent = reddit_recent + x_recent + web_recent + hn_recent + gh_recent + pm_recent
+    total_items = len(report.reddit) + len(report.x) + len(report.web) + len(report.hackernews) + len(report.github) + len(report.polymarket)
 
     return {
         "reddit_recent": reddit_recent,
         "x_recent": x_recent,
         "web_recent": web_recent,
+        "hn_recent": hn_recent,
+        "gh_recent": gh_recent,
+        "pm_recent": pm_recent,
         "total_recent": total_recent,
         "total_items": total_items,
         "is_sparse": total_recent < 5,
@@ -199,6 +205,121 @@ def render_compact(report: schema.Report, limit: int = 15, missing_keys: str = "
             lines.append(f"  *{item.why_relevant}*")
             lines.append("")
 
+    # Hacker News items
+    if report.hackernews_error:
+        lines.append("### Hacker News")
+        lines.append("")
+        lines.append(f"**ERROR:** {report.hackernews_error}")
+        lines.append("")
+    elif report.hackernews:
+        lines.append("### Hacker News")
+        lines.append("")
+        for item in report.hackernews[:limit]:
+            eng_str = ""
+            if item.engagement:
+                eng = item.engagement
+                parts = []
+                if eng.points is not None:
+                    parts.append(f"{eng.points}pts")
+                if eng.comments is not None:
+                    parts.append(f"{eng.comments}cmt")
+                if parts:
+                    eng_str = f" [{', '.join(parts)}]"
+
+            date_str = f" ({item.date})" if item.date else " (date unknown)"
+            conf_str = f" [date:{item.date_confidence}]" if item.date_confidence != "high" else ""
+
+            lines.append(f"**{item.id}** [HN] (score:{item.score}){date_str}{conf_str}{eng_str}")
+            lines.append(f"  {item.title}")
+            if item.url:
+                lines.append(f"  {item.url}")
+            lines.append(f"  {item.hn_url}")
+            lines.append(f"  *{item.why_relevant}*")
+
+            # Top comment insights
+            if item.comment_insights:
+                lines.append(f"  Insights:")
+                for insight in item.comment_insights[:3]:
+                    lines.append(f"    - {insight}")
+
+            lines.append("")
+
+    # GitHub items
+    if report.github_error:
+        lines.append("### GitHub")
+        lines.append("")
+        lines.append(f"**ERROR:** {report.github_error}")
+        lines.append("")
+    elif report.github:
+        lines.append("### GitHub")
+        lines.append("")
+        for item in report.github[:limit]:
+            eng_str = ""
+            if item.engagement:
+                eng = item.engagement
+                parts = []
+                if eng.reactions is not None:
+                    parts.append(f"{eng.reactions}rxn")
+                if eng.comments is not None:
+                    parts.append(f"{eng.comments}cmt")
+                if parts:
+                    eng_str = f" [{', '.join(parts)}]"
+
+            date_str = f" ({item.date})" if item.date else " (date unknown)"
+            conf_str = f" [date:{item.date_confidence}]" if item.date_confidence != "high" else ""
+            kind = "PR" if item.is_pr else "issue"
+
+            lines.append(f"**{item.id}** [GH {kind}] (score:{item.score}) {item.container}{date_str}{conf_str}{eng_str}")
+            lines.append(f"  {item.title}")
+            lines.append(f"  {item.url}")
+            lines.append(f"  *{item.why_relevant}*")
+
+            # Top comments (from enrichment)
+            if item.top_comments:
+                lines.append(f"  Top comments:")
+                for c in item.top_comments[:2]:
+                    excerpt = (c.get("excerpt") or "")[:150]
+                    lines.append(f"    - @{c.get('author', '?')}: {excerpt}")
+
+            lines.append("")
+
+    # Polymarket items
+    if report.polymarket_error:
+        lines.append("### Polymarket")
+        lines.append("")
+        lines.append(f"**ERROR:** {report.polymarket_error}")
+        lines.append("")
+    elif report.polymarket:
+        lines.append("### Polymarket")
+        lines.append("")
+        for item in report.polymarket[:limit]:
+            vol_str = ""
+            if item.engagement and item.engagement.volume is not None:
+                vol_str = f" [${item.engagement.volume:,.0f} vol]"
+
+            date_str = f" ({item.date})" if item.date else ""
+            move_str = f" — {item.price_movement}" if item.price_movement else ""
+
+            lines.append(f"**PM** (score:{item.score}){date_str}{vol_str}{move_str}")
+            lines.append(f"  {item.title}")
+            lines.append(f"  {item.url}")
+
+            # Odds: top outcomes as percentages (real money signal)
+            if item.outcome_prices:
+                odds_parts = []
+                for pair in item.outcome_prices[:3]:
+                    try:
+                        name, price = pair[0], float(pair[1])
+                        odds_parts.append(f"{name}: {price * 100:.0f}%")
+                    except (IndexError, TypeError, ValueError):
+                        continue
+                if odds_parts:
+                    extra = f" (+{item.outcomes_remaining} more)" if item.outcomes_remaining else ""
+                    lines.append(f"  Odds: {' | '.join(odds_parts)}{extra}")
+
+            lines.append(f"  *{item.why_relevant}*")
+            lines.append("")
+
     return "\n".join(lines)
 
 
@@ -228,6 +349,12 @@ def render_context_snippet(report: schema.Report) -> str:
         all_items.append((item.score, "X", item.text[:50] + "...", item.url))
     for item in report.web[:5]:
         all_items.append((item.score, "Web", item.title[:50] + "...", item.url))
+    for item in report.hackernews[:5]:
+        all_items.append((item.score, "HN", item.title[:50] + "...", item.hn_url))
+    for item in report.github[:5]:
+        all_items.append((item.score, "GitHub", item.title[:50] + "...", item.url))
+    for item in report.polymarket[:5]:
+        all_items.append((item.score, "Polymarket", item.title[:50] + "...", item.url))
 
     all_items.sort(key=lambda x: -x[0])
     for score, source, text, url in all_items[:7]:
@@ -340,6 +467,89 @@ def render_full_report(report: schema.Report) -> str:
             lines.append(f"> {item.snippet}")
             lines.append("")
 
+    # Hacker News section
+    if report.hackernews:
+        lines.append("## Hacker News")
+        lines.append("")
+        for item in report.hackernews:
+            lines.append(f"### {item.id}: {item.title}")
+            lines.append("")
+            if item.url:
+                lines.append(f"- **Article:** {item.url}")
+            lines.append(f"- **Discussion:** {item.hn_url}")
+            lines.append(f"- **Date:** {item.date or 'Unknown'} (confidence: {item.date_confidence})")
+            lines.append(f"- **Score:** {item.score}/100")
+            lines.append(f"- **Relevance:** {item.why_relevant}")
+
+            if item.engagement:
+                eng = item.engagement
+                lines.append(f"- **Engagement:** {eng.points or '?'} points, {eng.comments or '?'} comments")
+
+            if item.comment_insights:
+                lines.append("")
+                lines.append("**Key Insights from Comments:**")
+                for insight in item.comment_insights:
+                    lines.append(f"- {insight}")
+
+            lines.append("")
+
+    # GitHub section
+    if report.github:
+        lines.append("## GitHub")
+        lines.append("")
+        for item in report.github:
+            kind = "PR" if item.is_pr else "Issue"
+            lines.append(f"### {item.id}: {item.title}")
+            lines.append("")
+            lines.append(f"- **Repo:** {item.container} ({kind}, {item.state})")
+            lines.append(f"- **URL:** {item.url}")
+            lines.append(f"- **Date:** {item.date or 'Unknown'} (confidence: {item.date_confidence})")
+            lines.append(f"- **Score:** {item.score}/100")
+            lines.append(f"- **Relevance:** {item.why_relevant}")
+
+            if item.engagement:
+                eng = item.engagement
+                lines.append(f"- **Engagement:** {eng.reactions or '?'} reactions, {eng.comments or '?'} comments")
+
+            if item.snippet:
+                lines.append("")
+                lines.append(f"> {item.snippet}")
+
+            lines.append("")
+
+    # Polymarket section
+    if report.polymarket:
+        lines.append("## Polymarket")
+        lines.append("")
+        for item in report.polymarket:
+            lines.append(f"### {item.title}")
+            lines.append("")
+            lines.append(f"- **URL:** {item.url}")
+            lines.append(f"- **Date:** {item.date or 'Unknown'} (confidence: {item.date_confidence})")
+            if item.end_date:
+                lines.append(f"- **Resolves:** {item.end_date}")
+            lines.append(f"- **Score:** {item.score}/100")
+            if item.price_movement:
+                lines.append(f"- **Movement:** {item.price_movement}")
+
+            if item.engagement:
+                eng = item.engagement
+                vol = f"${eng.volume:,.0f}" if eng.volume is not None else "?"
+                liq = f"${eng.liquidity:,.0f}" if eng.liquidity is not None else "?"
+                lines.append(f"- **Volume:** {vol} | **Liquidity:** {liq}")
+
+            if item.outcome_prices:
+                lines.append("")
+                lines.append("**Odds (real money):**")
+                for pair in item.outcome_prices:
+                    try:
+                        name, price = pair[0], float(pair[1])
+                        lines.append(f"- {name}: {price * 100:.0f}%")
+                    except (IndexError, TypeError, ValueError):
+                        continue
+
+            lines.append("")
+
     # Placeholders for Claude synthesis
     lines.append("## Best Practices")
     lines.append("")
@@ -360,6 +570,9 @@ def write_outputs(
     raw_xai: Optional[dict] = None,
     raw_reddit_enriched: Optional[list] = None,
     raw_x_enriched: Optional[list] = None,
+    raw_hn: Optional[dict] = None,
+    raw_gh: Optional[dict] = None,
+    raw_pm: Optional[dict] = None,
 ):
     """Write all output files.
 
@@ -368,6 +581,10 @@ def write_outputs(
         raw_openai: Raw OpenAI API response
         raw_xai: Raw xAI API response
         raw_reddit_enriched: Raw enriched Reddit thread data
+        raw_x_enriched: Raw enriched X thread data
+        raw_hn: Raw Hacker News (Algolia) response
+        raw_gh: Raw GitHub Search API response
+        raw_pm: Raw Polymarket (Gamma) response
     """
     ensure_output_dir()
 
@@ -399,6 +616,18 @@ def write_outputs(
     if raw_x_enriched:
         with open(OUTPUT_DIR / "raw_x_threads_enriched.json", 'w') as f:
             json.dump(raw_x_enriched, f, indent=2)
+
+    if raw_hn:
+        with open(OUTPUT_DIR / "raw_hackernews.json", 'w') as f:
+            json.dump(raw_hn, f, indent=2)
+
+    if raw_gh:
+        with open(OUTPUT_DIR / "raw_github.json", 'w') as f:
+            json.dump(raw_gh, f, indent=2)
+
+    if raw_pm:
+        with open(OUTPUT_DIR / "raw_polymarket.json", 'w') as f:
+            json.dump(raw_pm, f, indent=2)
 
 
 def get_context_path() -> str:

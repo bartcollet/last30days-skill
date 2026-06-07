@@ -20,8 +20,10 @@ import os
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 # Add lib to path
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -33,10 +35,13 @@ from lib import (
     dedupe,
     entity_extract,
     env,
+    github,
+    hackernews,
     http,
     models,
     normalize,
     openai_reddit,
+    polymarket,
     reddit_enrich,
     render,
     schema,
@@ -46,6 +51,134 @@ from lib import (
     x_enrich,
     xai_x,
 )
+
+
+@dataclass
+class ResearchResult:
+    """Container for the output of run_research().
+
+    Replaces the previous positional return tuple so new sources can be added
+    without growing a fragile N-tuple and re-threading every unpack site.
+    """
+    reddit_items: list = field(default_factory=list)
+    x_items: list = field(default_factory=list)
+    hn_items: list = field(default_factory=list)
+    gh_items: list = field(default_factory=list)
+    pm_items: list = field(default_factory=list)
+    web_needed: bool = False
+    raw_openai: Optional[dict] = None
+    raw_xai: Optional[dict] = None
+    raw_hn: Optional[dict] = None
+    raw_gh: Optional[dict] = None
+    raw_pm: Optional[dict] = None
+    raw_reddit_enriched: list = field(default_factory=list)
+    raw_x_enriched: list = field(default_factory=list)
+    reddit_error: Optional[str] = None
+    x_error: Optional[str] = None
+    hackernews_error: Optional[str] = None
+    github_error: Optional[str] = None
+    polymarket_error: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Domain classifier: hard-gates which of the keyless sources (Hacker News,
+# GitHub, Polymarket) run for a given query. Reddit/X/web are domain-independent
+# (always on, subject to key availability) — only the three new sources are
+# gated. `--sources=all` bypasses this entirely.
+# ---------------------------------------------------------------------------
+
+# Tech/AI/dev signal tokens (compound terms checked as substrings of the topic;
+# single words checked as whole words to avoid false matches like "ai" in "email").
+_TECH_PHRASES = (
+    "open source", "open-source", "machine learning", "large language model",
+    "language model", "prompt engineering", "vibe coding", "server components",
+)
+_TECH_WORDS = frozenset({
+    "ai", "llm", "llms", "agent", "agents", "agentic", "mcp", "api", "apis",
+    "sdk", "cli", "code", "coding", "programming", "developer", "dev", "devtool",
+    "devtools", "python", "rust", "typescript", "javascript", "react", "vue",
+    "svelte", "nextjs", "node", "framework", "library", "repo", "repos", "github",
+    "git", "prompt", "prompts", "prompting", "claude", "gpt", "gemini", "llama",
+    "anthropic", "openai", "model", "models", "kubernetes", "docker", "compiler",
+    "database", "sql", "backend", "frontend", "fullstack", "devops", "embedding",
+    "embeddings", "rag", "fine-tuning", "finetuning", "inference", "transformer",
+    "neural", "algorithm", "opensource", "saas", "webapp", "plugin", "skill",
+    "skills", "subagent", "subagents", "copilot", "cursor", "codex",
+})
+
+# Societal / news / consumer / culture signal tokens.
+_SOC_PHRASES = (
+    "supreme court", "interest rate", "interest rates", "stock market",
+    "climate change", "box office",
+)
+_SOC_WORDS = frozenset({
+    "election", "elections", "politics", "political", "policy", "war", "court",
+    "senate", "congress", "president", "presidential", "vote", "votes", "voting",
+    "economy", "economic", "inflation", "recession", "stock", "stocks", "crypto",
+    "bitcoin", "ethereum", "price", "prices", "tariff", "tariffs", "sports",
+    "nba", "nfl", "soccer", "football", "olympics", "celebrity", "movie", "film",
+    "music", "album", "concert", "tour", "culture", "consumer", "shutdown",
+    "ceasefire", "protest", "scandal", "verdict", "midterm", "midterms",
+})
+
+_PERSON_MARKERS = frozenset({
+    "ceo", "founder", "cofounder", "co-founder", "startup", "startups",
+})
+
+# Which keyless sources run per domain (Reddit/X/web are always on, separately).
+DOMAIN_EXTRA_SOURCES = {
+    "TECHNICAL": {"hackernews", "github"},
+    "SOCIETAL": {"polymarket"},
+    "PERSON": {"github", "polymarket"},
+    "GENERAL": {"hackernews", "github", "polymarket"},
+}
+ALL_EXTRA_SOURCES = {"hackernews", "github", "polymarket"}
+
+
+def classify_domain(topic: str) -> str:
+    """Classify a research topic into a domain to hard-gate keyless sources.
+
+    Returns one of: TECHNICAL, SOCIETAL, PERSON, GENERAL.
+
+    Precedence: a clear technical signal wins (so "Claude Code" / "MCP servers"
+    route to HN+GitHub), then societal news, then a bare person/company name,
+    else GENERAL (all sources). The classifier is intentionally a small,
+    keyword-based heuristic — cheap, deterministic, and easy to tune.
+    """
+    if not topic or not topic.strip():
+        return "GENERAL"
+
+    lowered = topic.lower()
+    words = [w.strip(".,!?;:\"'()") for w in topic.split()]
+    word_set = {w.lower() for w in words if w}
+
+    tech_hits = sum(1 for p in _TECH_PHRASES if p in lowered)
+    tech_hits += len(word_set & _TECH_WORDS)
+    soc_hits = sum(1 for p in _SOC_PHRASES if p in lowered)
+    soc_hits += len(word_set & _SOC_WORDS)
+
+    # Person/company signal: explicit markers, an @handle, or a bare proper noun
+    # (1-3 tokens, all capitalised) with no tech/societal signal.
+    has_marker = bool(word_set & _PERSON_MARKERS) or topic.strip().startswith("@")
+    real_words = [w for w in words if w]
+    bare_proper_noun = (
+        1 <= len(real_words) <= 3
+        and all(w[0].isupper() for w in real_words if w and w[0].isalpha())
+        and any(w[0].isalpha() for w in real_words)
+    )
+
+    # Technical signal wins when present and at least as strong as societal.
+    if tech_hits and tech_hits >= soc_hits:
+        return "TECHNICAL"
+    if soc_hits and soc_hits > tech_hits:
+        return "SOCIETAL"
+    if has_marker or (bare_proper_noun and not tech_hits and not soc_hits):
+        return "PERSON"
+    if soc_hits:
+        return "SOCIETAL"
+    if tech_hits:
+        return "TECHNICAL"
+    return "GENERAL"
 
 
 def load_fixture(name: str) -> dict:
@@ -215,6 +348,123 @@ def _search_x(
     return x_items, raw_response, x_error
 
 
+def _search_hackernews(
+    topic: str,
+    from_date: str,
+    to_date: str,
+    depth: str,
+    mock: bool,
+) -> tuple:
+    """Search Hacker News via the free Algolia API (runs in thread).
+
+    Keyless and heuristic-scored (no LLM call). Returns whatever it finds;
+    an API failure surfaces as an error string rather than crashing the run.
+
+    Returns:
+        Tuple of (hn_items, raw_response, error)
+    """
+    if mock:
+        # No HN fixture; treat mock as an empty, error-free source.
+        return [], {"hits": []}, None
+
+    raw_response = None
+    hn_error = None
+
+    try:
+        raw_response = hackernews.search_hackernews(topic, from_date, to_date, depth=depth)
+    except Exception as e:
+        return [], {"error": str(e)}, f"{type(e).__name__}: {e}"
+
+    if isinstance(raw_response, dict) and raw_response.get("error"):
+        hn_error = raw_response["error"]
+
+    hn_items = hackernews.parse_hackernews_response(raw_response or {}, query=topic)
+
+    if hn_items and not hn_error:
+        try:
+            hn_items = hackernews.enrich_top_stories(hn_items, depth=depth)
+        except Exception:
+            pass  # Enrichment is best-effort; keep unenriched items
+
+    return hn_items, raw_response, hn_error
+
+
+def _search_github(
+    topic: str,
+    from_date: str,
+    to_date: str,
+    depth: str,
+    mock: bool,
+) -> tuple:
+    """Search GitHub Issues/PRs via the GitHub Search API (runs in thread).
+
+    Heuristic-scored (no LLM call). Auth via GITHUB_TOKEN or `gh auth token`.
+    With no token the source returns nothing as a clean, error-free skip
+    (the search endpoint requires auth, so a keyless run has nothing to show).
+
+    Returns:
+        Tuple of (gh_items, raw_response, error)
+    """
+    if mock:
+        return [], {"items": []}, None
+
+    # Resolve token once so the gh-CLI fallback fires at most once per query.
+    token = github.resolve_token()
+    if not token:
+        # Silent skip: no token means no GitHub data, but that's not an error.
+        return [], {"items": [], "error": "no token"}, None
+
+    try:
+        raw_response = github.search_github(topic, from_date, to_date, depth=depth, token=token)
+    except Exception as e:
+        return [], {"error": str(e)}, f"{type(e).__name__}: {e}"
+
+    gh_items = github.parse_github_response(raw_response or {})
+
+    if gh_items:
+        try:
+            gh_items = github.enrich_with_comments(gh_items, depth=depth, token=token)
+        except Exception:
+            pass  # Enrichment is best-effort; keep unenriched items
+
+    return gh_items, raw_response, None
+
+
+def _search_polymarket(
+    topic: str,
+    from_date: str,
+    to_date: str,
+    depth: str,
+    mock: bool,
+) -> tuple:
+    """Search Polymarket via the free Gamma API (runs in thread).
+
+    Keyless and heuristic-scored (no LLM call). The parse step applies the
+    common-word false-positive guards and drops everything when nothing is
+    genuinely on-topic, so a societal query returns markets only when relevant.
+
+    Returns:
+        Tuple of (pm_items, raw_response, error)
+    """
+    if mock:
+        return [], {"events": []}, None
+
+    raw_response = None
+    pm_error = None
+
+    try:
+        raw_response = polymarket.search_polymarket(topic, from_date, to_date, depth=depth)
+    except Exception as e:
+        return [], {"error": str(e)}, f"{type(e).__name__}: {e}"
+
+    if isinstance(raw_response, dict) and raw_response.get("error"):
+        pm_error = raw_response["error"]
+
+    pm_items = polymarket.parse_polymarket_response(raw_response or {}, topic=topic)
+
+    return pm_items, raw_response, pm_error
+
+
 def _run_supplemental(
     topic: str,
     reddit_items: list,
@@ -349,23 +599,33 @@ def run_research(
     mock: bool = False,
     progress: ui.ProgressDisplay = None,
     x_source: str = "xai",
-) -> tuple:
+    extra_sources: set = None,
+) -> "ResearchResult":
     """Run the research pipeline.
 
     Returns:
-        Tuple of (reddit_items, x_items, web_needed, raw_openai, raw_xai, raw_reddit_enriched, raw_x_enriched, reddit_error, x_error)
+        ResearchResult with per-source items, raw responses, and errors.
 
     Note: web_needed is True when WebSearch should be performed by Claude.
     The script outputs a marker and Claude handles WebSearch in its session.
     """
     reddit_items = []
     x_items = []
+    hn_items = []
+    gh_items = []
+    pm_items = []
     raw_openai = None
     raw_xai = None
+    raw_hn = None
+    raw_gh = None
+    raw_pm = None
     raw_reddit_enriched = []
     raw_x_enriched = []
     reddit_error = None
     x_error = None
+    hackernews_error = None
+    github_error = None
+    polymarket_error = None
 
     # Check if WebSearch is needed (always needed in web-only mode)
     web_needed = sources in ("all", "web", "reddit-web", "x-web")
@@ -375,18 +635,31 @@ def run_research(
         if progress:
             progress.start_web_only()
             progress.end_web_only()
-        return reddit_items, x_items, True, raw_openai, raw_xai, raw_reddit_enriched, raw_x_enriched, reddit_error, x_error
+        return ResearchResult(web_needed=True)
 
     # Determine which searches to run
     run_reddit = sources in ("both", "reddit", "all", "reddit-web")
     run_x = sources in ("both", "x", "all", "x-web")
+    # Hacker News, GitHub, and Polymarket are keyless/free (GitHub needs a
+    # token but is otherwise free). The domain classifier decides which of them
+    # run via `extra_sources`; Reddit/X/web are domain-independent. A None
+    # `extra_sources` means "run all" (e.g. direct callers that don't classify).
+    if extra_sources is None:
+        extra_sources = ALL_EXTRA_SOURCES
+    not_web = sources not in ("web",)
+    run_hn = not_web and "hackernews" in extra_sources
+    run_gh = not_web and "github" in extra_sources
+    run_pm = not_web and "polymarket" in extra_sources
 
-    # Run Reddit and X searches in parallel
+    # Run Reddit, X, HN, GitHub, and Polymarket searches in parallel
     reddit_future = None
     x_future = None
+    hn_future = None
+    gh_future = None
+    pm_future = None
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        # Submit both searches
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        # Submit searches
         if run_reddit:
             if progress:
                 progress.start_reddit()
@@ -401,6 +674,21 @@ def run_research(
             x_future = executor.submit(
                 _search_x, topic, config, selected_models,
                 from_date, to_date, depth, mock, x_source
+            )
+
+        if run_hn:
+            hn_future = executor.submit(
+                _search_hackernews, topic, from_date, to_date, depth, mock
+            )
+
+        if run_gh:
+            gh_future = executor.submit(
+                _search_github, topic, from_date, to_date, depth, mock
+            )
+
+        if run_pm:
+            pm_future = executor.submit(
+                _search_polymarket, topic, from_date, to_date, depth, mock
             )
 
         # Collect results
@@ -427,6 +715,36 @@ def run_research(
                     progress.show_error(f"X error: {e}")
             if progress:
                 progress.end_x(len(x_items))
+
+        if hn_future:
+            try:
+                hn_items, raw_hn, hackernews_error = hn_future.result()
+                if hackernews_error and progress:
+                    progress.show_error(f"HN error: {hackernews_error}")
+            except Exception as e:
+                hackernews_error = f"{type(e).__name__}: {e}"
+                if progress:
+                    progress.show_error(f"HN error: {e}")
+
+        if gh_future:
+            try:
+                gh_items, raw_gh, github_error = gh_future.result()
+                if github_error and progress:
+                    progress.show_error(f"GitHub error: {github_error}")
+            except Exception as e:
+                github_error = f"{type(e).__name__}: {e}"
+                if progress:
+                    progress.show_error(f"GitHub error: {e}")
+
+        if pm_future:
+            try:
+                pm_items, raw_pm, polymarket_error = pm_future.result()
+                if polymarket_error and progress:
+                    progress.show_error(f"Polymarket error: {polymarket_error}")
+            except Exception as e:
+                polymarket_error = f"{type(e).__name__}: {e}"
+                if progress:
+                    progress.show_error(f"Polymarket error: {e}")
 
     # Enrich Reddit items with real data (sequential, but with error handling per-item)
     # Global budget: 90s total for all Reddit enrichment to prevent runaway hangs.
@@ -519,7 +837,26 @@ def run_research(
             if progress:
                 progress.end_x_enrich()
 
-    return reddit_items, x_items, web_needed, raw_openai, raw_xai, raw_reddit_enriched, raw_x_enriched, reddit_error, x_error
+    return ResearchResult(
+        reddit_items=reddit_items,
+        x_items=x_items,
+        hn_items=hn_items,
+        gh_items=gh_items,
+        pm_items=pm_items,
+        web_needed=web_needed,
+        raw_openai=raw_openai,
+        raw_xai=raw_xai,
+        raw_hn=raw_hn,
+        raw_gh=raw_gh,
+        raw_pm=raw_pm,
+        raw_reddit_enriched=raw_reddit_enriched,
+        raw_x_enriched=raw_x_enriched,
+        reddit_error=reddit_error,
+        x_error=x_error,
+        hackernews_error=hackernews_error,
+        github_error=github_error,
+        polymarket_error=polymarket_error,
+    )
 
 
 def main():
@@ -553,9 +890,11 @@ def main():
     )
     parser.add_argument(
         "--sources",
-        choices=["auto", "reddit", "x", "both"],
+        choices=["auto", "reddit", "x", "both", "all"],
         default="auto",
-        help="Source selection",
+        help="Source selection. 'all' runs every source and bypasses the domain "
+             "classifier (full sweep). 'auto' (default) lets the classifier gate "
+             "Hacker News / GitHub / Polymarket by topic domain.",
     )
     parser.add_argument(
         "--quick",
@@ -648,6 +987,17 @@ def main():
         print(f"📎 Shareable brief saved to {output_path}")
         sys.exit(0)
 
+    # Domain classification: hard-gate which keyless sources (HN/GitHub/
+    # Polymarket) run. `--sources=all` bypasses the classifier (full sweep).
+    classifier_bypass = (args.sources == "all")
+    domain = classify_domain(args.topic)
+    if classifier_bypass:
+        extra_sources = set(ALL_EXTRA_SOURCES)
+        domain_label = "ALL (override)"
+    else:
+        extra_sources = set(DOMAIN_EXTRA_SOURCES.get(domain, ALL_EXTRA_SOURCES))
+        domain_label = domain
+
     # Query coaching: output parsed intent for Claude to consume
     if not args.no_coach:
         topic_words = args.topic.strip().split()
@@ -664,6 +1014,9 @@ def main():
         sys.stderr.write("### QUERY PARSED ###\n")
         sys.stderr.write(f"TOPIC: {args.topic}\n")
         sys.stderr.write(f"QUERY_TYPE: {detected_type}\n")
+        sys.stderr.write(f"DOMAIN: {domain_label}\n")
+        # Keyless sources gated ON for this domain (Reddit/X/web always run).
+        sys.stderr.write(f"EXTRA_SOURCES: {','.join(sorted(extra_sources)) or 'none'}\n")
         sys.stderr.write(f"BREADTH: {breadth}\n")
         sys.stderr.write(f"WORD_COUNT: {len(topic_words)}\n")
         sys.stderr.write("### END QUERY PARSED ###\n\n")
@@ -689,15 +1042,19 @@ def main():
         elif available == 'web':
             available = 'x'  # Now have X via Bird
 
+    # `--sources=all` bypasses the classifier; for the Reddit/X/web axis it
+    # behaves like 'auto' (use whatever keys are available).
+    reddit_x_request = "auto" if classifier_bypass else args.sources
+
     # Mock mode can work without keys
     if args.mock:
-        if args.sources == "auto":
+        if reddit_x_request == "auto":
             sources = "both"
         else:
-            sources = args.sources
+            sources = reddit_x_request
     else:
         # Validate requested sources against available
-        sources, error = env.validate_sources(args.sources, available, args.include_web)
+        sources, error = env.validate_sources(reddit_x_request, available, args.include_web)
         if error:
             # If it's a warning about WebSearch fallback, print but continue
             if "WebSearch fallback" in error:
@@ -752,7 +1109,7 @@ def main():
         mode = sources
 
     # Run research
-    reddit_items, x_items, web_needed, raw_openai, raw_xai, raw_reddit_enriched, raw_x_enriched, reddit_error, x_error = run_research(
+    result = run_research(
         args.topic,
         sources,
         config,
@@ -763,7 +1120,26 @@ def main():
         args.mock,
         progress,
         x_source=x_source or "xai",
+        extra_sources=extra_sources,
     )
+    reddit_items = result.reddit_items
+    x_items = result.x_items
+    hn_items = result.hn_items
+    gh_items = result.gh_items
+    pm_items = result.pm_items
+    web_needed = result.web_needed
+    raw_openai = result.raw_openai
+    raw_xai = result.raw_xai
+    raw_hn = result.raw_hn
+    raw_gh = result.raw_gh
+    raw_pm = result.raw_pm
+    raw_reddit_enriched = result.raw_reddit_enriched
+    raw_x_enriched = result.raw_x_enriched
+    reddit_error = result.reddit_error
+    x_error = result.x_error
+    hackernews_error = result.hackernews_error
+    github_error = result.github_error
+    polymarket_error = result.polymarket_error
 
     # Processing phase
     progress.start_processing()
@@ -771,23 +1147,38 @@ def main():
     # Normalize items
     normalized_reddit = normalize.normalize_reddit_items(reddit_items, from_date, to_date)
     normalized_x = normalize.normalize_x_items(x_items, from_date, to_date)
+    normalized_hn = normalize.normalize_hn_items(hn_items, from_date, to_date)
+    normalized_gh = normalize.normalize_github_items(gh_items, from_date, to_date)
+    normalized_pm = normalize.normalize_polymarket_items(pm_items, from_date, to_date)
 
     # Hard date filter: exclude items with verified dates outside the range
     # This is the safety net - even if prompts let old content through, this filters it
     filtered_reddit = normalize.filter_by_date_range(normalized_reddit, from_date, to_date)
     filtered_x = normalize.filter_by_date_range(normalized_x, from_date, to_date)
+    filtered_hn = normalize.filter_by_date_range(normalized_hn, from_date, to_date)
+    filtered_gh = normalize.filter_by_date_range(normalized_gh, from_date, to_date)
+    filtered_pm = normalize.filter_by_date_range(normalized_pm, from_date, to_date)
 
     # Score items
     scored_reddit = score.score_reddit_items(filtered_reddit)
     scored_x = score.score_x_items(filtered_x)
+    scored_hn = score.score_hn_items(filtered_hn)
+    scored_gh = score.score_github_items(filtered_gh)
+    scored_pm = score.score_polymarket_items(filtered_pm)
 
     # Sort items
     sorted_reddit = score.sort_items(scored_reddit)
     sorted_x = score.sort_items(scored_x)
+    sorted_hn = score.sort_items(scored_hn)
+    sorted_gh = score.sort_items(scored_gh)
+    sorted_pm = score.sort_items(scored_pm)
 
     # Dedupe items
     deduped_reddit = dedupe.dedupe_reddit(sorted_reddit)
     deduped_x = dedupe.dedupe_x(sorted_x)
+    deduped_hn = dedupe.dedupe_items(sorted_hn)
+    deduped_gh = dedupe.dedupe_items(sorted_gh)
+    deduped_pm = dedupe.dedupe_items(sorted_pm)
 
     # Minimum result guarantee: if all Reddit results were filtered out but
     # we had raw results, keep top 3 by relevance regardless of score
@@ -809,14 +1200,20 @@ def main():
     )
     report.reddit = deduped_reddit
     report.x = deduped_x
+    report.hackernews = deduped_hn
+    report.github = deduped_gh
+    report.polymarket = deduped_pm
     report.reddit_error = reddit_error
     report.x_error = x_error
+    report.hackernews_error = hackernews_error
+    report.github_error = github_error
+    report.polymarket_error = polymarket_error
 
     # Generate context snippet
     report.context_snippet_md = render.render_context_snippet(report)
 
     # Write outputs
-    render.write_outputs(report, raw_openai, raw_xai, raw_reddit_enriched, raw_x_enriched)
+    render.write_outputs(report, raw_openai, raw_xai, raw_reddit_enriched, raw_x_enriched, raw_hn, raw_gh, raw_pm)
 
     # Show completion
     if sources == "web":

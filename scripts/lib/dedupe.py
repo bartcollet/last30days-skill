@@ -37,11 +37,11 @@ def jaccard_similarity(set1: Set[str], set2: Set[str]) -> float:
 
 
 def get_item_text(item: Union[schema.RedditItem, schema.XItem]) -> str:
-    """Get comparable text from an item."""
-    if isinstance(item, schema.RedditItem):
-        return item.title
-    else:
-        return item.text
+    """Get comparable text from an item.
+
+    Reddit/HN/Web items carry a ``title``; X items carry ``text``.
+    """
+    return getattr(item, "title", None) or getattr(item, "text", "") or ""
 
 
 def find_duplicates(

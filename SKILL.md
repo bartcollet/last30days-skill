@@ -108,7 +108,30 @@ python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/last30days}/scripts/last30da
 The script will automatically:
 - Detect available API keys
 - Run Reddit/X searches if keys exist
+- Run the keyless sources (Hacker News, GitHub, Polymarket) gated by topic domain (see below)
 - Signal if WebSearch is needed
+
+---
+
+## Python-side keyless sources + domain gating
+
+In addition to Reddit/X, the script runs three **keyless** sources entirely inside Python — you take no action for these, they arrive in the compact output alongside Reddit/X:
+
+- **Hacker News** (free Algolia API) — technical consensus, story points + top comments.
+- **GitHub** (GitHub Search API; needs a token via `GITHUB_TOKEN` or `gh auth token` — if neither is present it is silently skipped, never an error) — what's shipping right now: issues/PRs with reactions.
+- **Polymarket** (free Gamma API) — real-money prediction-market odds.
+
+**Domain classifier (hard gate).** The script classifies the topic and emits a `DOMAIN:` marker inside the `### QUERY PARSED ###` block, then runs only the keyless sources that fit. Reddit, X, and the web (Brave/Firecrawl) are **always** run; only HN/GitHub/Polymarket are gated:
+
+| `DOMAIN:` | Keyless sources that run (`EXTRA_SOURCES:`) |
+|---|---|
+| `TECHNICAL` | Hacker News + GitHub (no Polymarket) |
+| `SOCIETAL` | Polymarket (no HN/GitHub) |
+| `PERSON` | GitHub + Polymarket (no HN) |
+| `GENERAL` | all three |
+| `ALL (override)` | all three (classifier bypassed via `--sources=all`) |
+
+Read the `DOMAIN:` and `EXTRA_SOURCES:` markers to know which sources ran. **Only show a source's stats line if it actually ran** — a source the classifier skipped has no section in the output, so do not emit a "0 …" line for it.
 
 ---
 
@@ -168,6 +191,7 @@ The script auto-detects sources (Bird CLI, API keys, etc). While waiting for it,
 - `--quick` : Faster, fewer sources (8-12 each)
 - (default) : Balanced (20-30 each)
 - `--deep` : Comprehensive (50-70 Reddit, 40-60 X)
+- `--sources=all` : Run every source and **bypass the domain classifier** (full sweep — forces Hacker News + GitHub + Polymarket on regardless of topic). Default `--sources=auto` lets the classifier gate them by domain.
 
 ---
 
@@ -384,6 +408,9 @@ KEY PATTERNS from the research:
 ✅ All agents reported back!
 ├─ 🟠 Reddit: {N} threads │ {N} upvotes │ {N} comments
 ├─ 🔵 X: {N} posts │ {N} likes │ {N} reposts (via Bird/xAI)
+├─ 🟧 HN: {N} stories │ {N} points │ {N} comments
+├─ 🐙 GitHub: {N} issues/PRs │ {N} reactions
+├─ 🎲 Polymarket: {N} markets │ ${N} volume
 ├─ 🌐 Brave: {N} pages (supplementary)
 ├─ 🔥 Firecrawl: {N} pages deep-scraped │ {N} structured extractions
 └─ 🗣️ Top voices: @{handle1} ({N} likes), @{handle2} │ r/{sub1}, r/{sub2}
@@ -391,6 +418,7 @@ KEY PATTERNS from the research:
 ```
 
 If Reddit returned 0 threads, write: "├─ 🟠 Reddit: 0 threads (no results this cycle)"
+**Omit the HN / GitHub / Polymarket line entirely if the domain classifier skipped that source** (it has no section in the output) — do NOT print "0" for a source that never ran. A source that ran but found nothing may show "0".
 NEVER use plain text dashes (-) or pipe (|). ALWAYS use ├─ └─ │ and the emoji.
 
 **SELF-CHECK before displaying**: Re-read your "What I learned" section. Does it match what the research ACTUALLY says? If you catch yourself projecting your own knowledge instead of the research, rewrite it.

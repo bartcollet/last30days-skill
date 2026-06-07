@@ -51,9 +51,19 @@ Examples:
 
 ## What It Does
 
-1. **Researches** - Scans Reddit and X for discussions from the last 30 days
+1. **Researches** - Scans Reddit, X, the web (Brave + Firecrawl) and three keyless sources — **Hacker News**, **GitHub** and **Polymarket** — for the last 30 days
 2. **Synthesizes** - Identifies patterns, best practices, and what actually works
 3. **Delivers** - Either writes copy-paste-ready prompts for your target tool, or gives you a curated expert-level answer
+
+### Sources & domain gating
+
+Reddit, X and the web always run. The three keyless sources are **gated by a domain classifier** so each query only pulls what's relevant (and `--sources=all` forces a full sweep):
+
+| Source | Auth | Runs for |
+|---|---|---|
+| Hacker News (Algolia) | none | technical / general topics |
+| GitHub (Search API) | `GITHUB_TOKEN` or `gh auth token` (else silently skipped) | technical / person / general |
+| Polymarket (Gamma) | none | societal / person / general |
 
 ### Use it for:
 - **Prompt research** - "What prompting techniques work for legal questions in ChatGPT?"

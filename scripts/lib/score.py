@@ -68,6 +68,59 @@ def compute_x_engagement_raw(engagement: Optional[schema.Engagement]) -> Optiona
     return 0.55 * likes + 0.25 * reposts + 0.15 * replies + 0.05 * quotes
 
 
+def compute_hn_engagement_raw(engagement: Optional[schema.Engagement]) -> Optional[float]:
+    """Compute raw engagement score for a Hacker News story.
+
+    Formula: 0.60*log1p(points) + 0.40*log1p(comments)
+    """
+    if engagement is None:
+        return None
+
+    if engagement.points is None and engagement.comments is None:
+        return None
+
+    points = log1p_safe(engagement.points)
+    comments = log1p_safe(engagement.comments)
+
+    return 0.60 * points + 0.40 * comments
+
+
+def compute_github_engagement_raw(engagement: Optional[schema.Engagement]) -> Optional[float]:
+    """Compute raw engagement score for a GitHub issue/PR.
+
+    Formula: 0.60*log1p(reactions) + 0.40*log1p(comments)
+    """
+    if engagement is None:
+        return None
+
+    if engagement.reactions is None and engagement.comments is None:
+        return None
+
+    reactions = log1p_safe(engagement.reactions)
+    comments = log1p_safe(engagement.comments)
+
+    return 0.60 * reactions + 0.40 * comments
+
+
+def compute_polymarket_engagement_raw(engagement: Optional[schema.Engagement]) -> Optional[float]:
+    """Compute raw engagement score for a Polymarket event.
+
+    Formula: 0.60*log1p(volume) + 0.40*log1p(liquidity)
+    Volume/liquidity are dollar figures, so log1p keeps them comparable to the
+    other sources' engagement scales.
+    """
+    if engagement is None:
+        return None
+
+    if engagement.volume is None and engagement.liquidity is None:
+        return None
+
+    volume = log1p_safe(engagement.volume)
+    liquidity = log1p_safe(engagement.liquidity)
+
+    return 0.60 * volume + 0.40 * liquidity
+
+
 def normalize_to_100(values: List[float], default: float = 50) -> List[float]:
     """Normalize a list of values to 0-100 scale.
 
@@ -225,6 +278,177 @@ def score_x_items(items: List[schema.XItem]) -> List[schema.XItem]:
     return items
 
 
+def score_hn_items(items: List[schema.HackerNewsItem]) -> List[schema.HackerNewsItem]:
+    """Compute scores for Hacker News items.
+
+    Uses the same relevance/recency/engagement weighting as Reddit/X so HN
+    stories rank comparably in a blended brief.
+    """
+    if not items:
+        return items
+
+    # Compute raw engagement scores
+    eng_raw = [compute_hn_engagement_raw(item.engagement) for item in items]
+
+    # Normalize engagement to 0-100
+    eng_normalized = normalize_to_100(eng_raw)
+
+    for i, item in enumerate(items):
+        # Relevance subscore (heuristic-provided, convert to 0-100)
+        rel_score = int(item.relevance * 100)
+
+        # Recency subscore
+        rec_score = dates.recency_score(item.date)
+
+        # Engagement subscore
+        if eng_normalized[i] is not None:
+            eng_score = int(eng_normalized[i])
+        else:
+            eng_score = DEFAULT_ENGAGEMENT
+
+        # Store subscores
+        item.subs = schema.SubScores(
+            relevance=rel_score,
+            recency=rec_score,
+            engagement=eng_score,
+        )
+
+        # Compute overall score
+        overall = (
+            WEIGHT_RELEVANCE * rel_score +
+            WEIGHT_RECENCY * rec_score +
+            WEIGHT_ENGAGEMENT * eng_score
+        )
+
+        # Apply penalty for unknown engagement
+        if eng_raw[i] is None:
+            overall -= UNKNOWN_ENGAGEMENT_PENALTY
+
+        # Apply penalty for low date confidence
+        if item.date_confidence == "low":
+            overall -= 5
+        elif item.date_confidence == "med":
+            overall -= 2
+
+        item.score = max(0, min(100, int(overall)))
+
+    return items
+
+
+def score_github_items(items: List[schema.GitHubItem]) -> List[schema.GitHubItem]:
+    """Compute scores for GitHub items.
+
+    Uses the same relevance/recency/engagement weighting as Reddit/X so GitHub
+    issues/PRs rank comparably in a blended brief.
+    """
+    if not items:
+        return items
+
+    # Compute raw engagement scores
+    eng_raw = [compute_github_engagement_raw(item.engagement) for item in items]
+
+    # Normalize engagement to 0-100
+    eng_normalized = normalize_to_100(eng_raw)
+
+    for i, item in enumerate(items):
+        # Relevance subscore (heuristic-provided, convert to 0-100)
+        rel_score = int(item.relevance * 100)
+
+        # Recency subscore
+        rec_score = dates.recency_score(item.date)
+
+        # Engagement subscore
+        if eng_normalized[i] is not None:
+            eng_score = int(eng_normalized[i])
+        else:
+            eng_score = DEFAULT_ENGAGEMENT
+
+        # Store subscores
+        item.subs = schema.SubScores(
+            relevance=rel_score,
+            recency=rec_score,
+            engagement=eng_score,
+        )
+
+        # Compute overall score
+        overall = (
+            WEIGHT_RELEVANCE * rel_score +
+            WEIGHT_RECENCY * rec_score +
+            WEIGHT_ENGAGEMENT * eng_score
+        )
+
+        # Apply penalty for unknown engagement
+        if eng_raw[i] is None:
+            overall -= UNKNOWN_ENGAGEMENT_PENALTY
+
+        # Apply penalty for low date confidence
+        if item.date_confidence == "low":
+            overall -= 5
+        elif item.date_confidence == "med":
+            overall -= 2
+
+        item.score = max(0, min(100, int(overall)))
+
+    return items
+
+
+def score_polymarket_items(items: List[schema.PolymarketItem]) -> List[schema.PolymarketItem]:
+    """Compute scores for Polymarket items.
+
+    Uses the same relevance/recency/engagement weighting as the other sources
+    so prediction markets rank comparably in a blended brief.
+    """
+    if not items:
+        return items
+
+    # Compute raw engagement scores
+    eng_raw = [compute_polymarket_engagement_raw(item.engagement) for item in items]
+
+    # Normalize engagement to 0-100
+    eng_normalized = normalize_to_100(eng_raw)
+
+    for i, item in enumerate(items):
+        # Relevance subscore (heuristic-provided, convert to 0-100)
+        rel_score = int(item.relevance * 100)
+
+        # Recency subscore
+        rec_score = dates.recency_score(item.date)
+
+        # Engagement subscore
+        if eng_normalized[i] is not None:
+            eng_score = int(eng_normalized[i])
+        else:
+            eng_score = DEFAULT_ENGAGEMENT
+
+        # Store subscores
+        item.subs = schema.SubScores(
+            relevance=rel_score,
+            recency=rec_score,
+            engagement=eng_score,
+        )
+
+        # Compute overall score
+        overall = (
+            WEIGHT_RELEVANCE * rel_score +
+            WEIGHT_RECENCY * rec_score +
+            WEIGHT_ENGAGEMENT * eng_score
+        )
+
+        # Apply penalty for unknown engagement
+        if eng_raw[i] is None:
+            overall -= UNKNOWN_ENGAGEMENT_PENALTY
+
+        # Apply penalty for low date confidence
+        if item.date_confidence == "low":
+            overall -= 5
+        elif item.date_confidence == "med":
+            overall -= 2
+
+        item.score = max(0, min(100, int(overall)))
+
+    return items
+
+
 def score_websearch_items(items: List[schema.WebSearchItem]) -> List[schema.WebSearchItem]:
     """Compute scores for WebSearch items WITHOUT engagement metrics.
 
@@ -282,7 +506,7 @@ def score_websearch_items(items: List[schema.WebSearchItem]) -> List[schema.WebS
     return items
 
 
-def sort_items(items: List[Union[schema.RedditItem, schema.XItem, schema.WebSearchItem]]) -> List:
+def sort_items(items: List[Union[schema.RedditItem, schema.XItem, schema.HackerNewsItem, schema.GitHubItem, schema.PolymarketItem, schema.WebSearchItem]]) -> List:
     """Sort items by score (descending), then date, then source priority.
 
     Args:
@@ -299,13 +523,19 @@ def sort_items(items: List[Union[schema.RedditItem, schema.XItem, schema.WebSear
         date = item.date or "0000-00-00"
         date_key = -int(date.replace("-", ""))
 
-        # Tertiary: source priority (Reddit > X > WebSearch)
+        # Tertiary: source priority (Reddit > X > HN > GitHub > Polymarket > WebSearch)
         if isinstance(item, schema.RedditItem):
             source_priority = 0
         elif isinstance(item, schema.XItem):
             source_priority = 1
-        else:  # WebSearchItem
+        elif isinstance(item, schema.HackerNewsItem):
             source_priority = 2
+        elif isinstance(item, schema.GitHubItem):
+            source_priority = 3
+        elif isinstance(item, schema.PolymarketItem):
+            source_priority = 4
+        else:  # WebSearchItem
+            source_priority = 5
 
         # Quaternary: title/text for stability
         text = getattr(item, "title", "") or getattr(item, "text", "")
