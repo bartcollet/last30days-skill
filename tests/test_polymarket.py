@@ -66,6 +66,35 @@ class TestParsePolymarket(unittest.TestCase):
         self.assertFalse(polymarket._passes_topic_filter("kanye west", "Who wins the NFC West"))
 
 
+class TestShortenQuestion(unittest.TestCase):
+    def test_clean_entity_market(self):
+        self.assertEqual(
+            polymarket._shorten_question("Will Arizona win the 2026 NCAA Tournament?"),
+            "Arizona",
+        )
+        self.assertEqual(
+            polymarket._shorten_question("Will the Lakers win the title?"),
+            "Lakers",
+        )
+
+    def test_enumerated_market_keeps_distinguisher(self):
+        # Sibling sub-markets differ only by the number — the label must NOT
+        # collapse to a bare article ("the"); the number must survive.
+        a = polymarket._shorten_question(
+            "Will the Republican Party hold 47 or fewer Senate seats after the 2026 midterm elections?")
+        b = polymarket._shorten_question(
+            "Will the Republican Party hold exactly 51 Senate seats after the 2026 midterm elections?")
+        self.assertNotEqual(a, b)
+        self.assertIn("47", a)
+        self.assertIn("51", b)
+
+    def test_no_bare_stopword_label(self):
+        for q in ("Will there be another government shutdown?",
+                  "Will the Republican Party hold 49 Senate seats?"):
+            label = polymarket._shorten_question(q)
+            self.assertNotIn(label.lower(), polymarket._GENERIC_LABEL_TOKENS)
+
+
 class TestNormalizeAndScorePolymarket(unittest.TestCase):
     def test_normalize_and_score(self):
         resp = {"events": [_event("2026 election control of Senate")], "_cap": 15}

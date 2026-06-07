@@ -463,21 +463,52 @@ def _parse_outcome_prices(market: Dict[str, Any]) -> List[tuple]:
     return result
 
 
+# Bare labels that carry no meaning on their own. When the entity extractor
+# can only pull one of these (e.g. "Will the ... hold N seats?" -> "the", or
+# "Will there be ...?" -> "there"), fall back to a distinguishing trim of the
+# question so multi-outcome markets don't all collapse to the same label.
+_GENERIC_LABEL_TOKENS = frozenset({
+    "the", "there", "a", "an", "it", "this", "that", "they", "their",
+    "his", "her", "its", "another",
+})
+
+
 def _shorten_question(question: str) -> str:
     """Extract a short display name from a market question.
 
     'Will Arizona win the 2026 NCAA Tournament?' -> 'Arizona'
+    'Will the Republican Party hold 51 Senate seats?' -> 'Republican Party hold 51 Senate seats'
+    'Will there be another government shutdown?' -> 'be another government shutdown'
     """
     q = question.strip().rstrip("?")
-    # Common patterns: "Will X win/be/...", "X wins/loses..."
-    m = re.match(r"^Will\s+(.+?)\s+(?:win|be|make|reach|have|lose|qualify|advance|strike|agree|pass|sign|get|become|remain|stay|leave|survive|next)\b", q, re.IGNORECASE)
+
+    def _clean(name: str) -> str:
+        # Strip a leading article so "the Lakers" -> "Lakers".
+        return re.sub(r"^(?:the|a|an)\s+", "", name.strip(), flags=re.IGNORECASE).strip()
+
+    # Entity-style markets: "Will X <verb> ..." -> X (e.g. "Arizona").
+    # NB: deliberately excludes "hold" so enumerated markets like "Will the
+    # Republican Party hold N seats?" fall through to the number-preserving
+    # fallback instead of collapsing every sibling to the same entity name.
+    m = re.match(
+        r"^Will\s+(.+?)\s+(?:win|wins|be|make|reach|have|lose|qualify|"
+        r"advance|strike|agree|pass|sign|get|become|remain|stay|leave|survive|"
+        r"next)\b",
+        q, re.IGNORECASE,
+    )
     if m:
-        return m.group(1).strip()
-    m = re.match(r"^Will\s+(.+?)\s+", q, re.IGNORECASE)
-    if m and len(m.group(1).split()) <= 4:
-        return m.group(1).strip()
-    # Fallback: truncate
-    return question[:40] if len(question) > 40 else question
+        name = _clean(m.group(1))
+        if name and name.lower() not in _GENERIC_LABEL_TOKENS and len(name) > 2:
+            return name
+
+    # Fallback: drop a leading "Will (the|a|an)" and keep the distinguishing
+    # remainder (the part that differs between sibling sub-markets, e.g. the
+    # seat count), truncated for display.
+    trimmed = re.sub(r"^Will\s+(?:the|a|an)\s+", "", q, flags=re.IGNORECASE)
+    trimmed = re.sub(r"^Will\s+", "", trimmed, flags=re.IGNORECASE).strip()
+    if not trimmed:
+        trimmed = q
+    return (trimmed[:45].rstrip() + "…") if len(trimmed) > 45 else trimmed
 
 
 def _compute_text_similarity(topic: str, title: str, outcomes: List[str] = None) -> float:
