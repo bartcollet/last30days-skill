@@ -137,7 +137,7 @@ Read the `DOMAIN:` and `EXTRA_SOURCES:` markers to know which sources ran. **Onl
 
 ## STEP 2: WEB SWEEP WHILE SCRIPT RUNS (Firecrawl primary + Brave complementary)
 
-The script auto-detects sources (Bird CLI, API keys, etc). While waiting for it, sweep the web with **Firecrawl Search** (primary) plus one complementary **Brave** pass. Fall back to `WebSearch` with the same queries only if both MCPs error.
+The script auto-detects sources (Bird CLI, API keys, etc). While waiting for it, sweep the web with **Firecrawl Search** (primary) plus one complementary **Brave** pass. Fall back to `WebSearch` with the same queries only if both MCPs error. WebSearch has no date filter, so check each WebSearch result's date before treating it as recent. Keep date words (years, months) out of every query: Firecrawl and Brave filter by date themselves, and a year in the query pulls in year-labelled pages instead of recent ones.
 
 ### Primary: Firecrawl search-with-highlights
 
@@ -159,7 +159,7 @@ Question-phrased primaries first (they trigger highlights), one broad backstop l
 
 **If RECOMMENDATIONS** ("best X", "top X", "what X should I use"):
 - `what are the best {TOPIC} people recommend right now?`
-- `which {TOPIC} is most popular in 2026 and why?`
+- `which {TOPIC} is most popular right now and why?`
 - Backstop: `best {TOPIC} comparison`
 - Goal: Find SPECIFIC NAMES of things, not generic advice
 
@@ -173,7 +173,7 @@ Question-phrased primaries first (they trigger highlights), one broad backstop l
 **If PROMPTING** ("X prompts", "prompting for X"):
 - `how do people write effective {TOPIC} prompts?`
 - `which {TOPIC} techniques work best?`
-- Backstop: `{TOPIC} prompts examples 2026`
+- Backstop: `{TOPIC} prompts examples`
 - Goal: Find prompting techniques and examples to create copy-paste prompts
 
 **If GENERAL** (default):
@@ -306,7 +306,7 @@ The Judge Agent must:
 1. Weight Reddit/X sources HIGHER (they have engagement signals: upvotes, likes)
 2. Weight **deep-scraped content** next (full context > preview)
 3. Weight **Firecrawl RICH highlights** just below scraped content: they are verbatim page excerpts with citable facts, well above snippet tier
-4. Weight snippet-only results (Brave, THIN fallbacks, WebSearch) LOWEST (no engagement data, no full content)
+4. Weight snippet-only results (Brave, THIN fallbacks, WebSearch) LOWEST (no engagement data, no full content). Present an undated web result as recent only when its content shows a date inside the window; otherwise use it as background, not as a recent development
 5. Identify patterns that appear across ALL sources (strongest signals)
 6. Note any contradictions between sources
 7. Extract the top 3-5 actionable insights
