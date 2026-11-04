@@ -9,7 +9,7 @@ allowed-tools: Bash, Read, Write, AskUserQuestion, WebSearch, mcp__brave-search_
 
 Research ANY topic across Reddit, X, and the web. Surface what people are actually discussing, recommending, and debating right now.
 
-## CRITICAL: Parse User Intent
+## Parse User Intent
 
 Before doing anything, parse the user's input for:
 
@@ -28,14 +28,14 @@ Common patterns:
 - "best [topic]" or "top [topic]" → QUERY_TYPE = RECOMMENDATIONS
 - "what are the best [topic]" → QUERY_TYPE = RECOMMENDATIONS
 
-**IMPORTANT: Do NOT ask about target tool before research.**
+**Don't ask about the target tool before research.**
 - If tool is specified in the query, use it
 - If tool is NOT specified, run research first, then ask AFTER showing results
 
 **Store these variables:**
 - `TOPIC = [extracted topic]`
 - `TARGET_TOOL = [extracted tool, or "unknown" if not specified]`
-- `QUERY_TYPE = [RECOMMENDATIONS | NEWS | HOW-TO | GENERAL]`
+- `QUERY_TYPE = [RECOMMENDATIONS | NEWS | PROMPTING | GENERAL]`
 
 **DISPLAY your parsing to the user.** Before running any tools, output:
 
@@ -52,7 +52,7 @@ Research typically takes 2-8 minutes (niche topics take longer). Starting now.
 
 If TARGET_TOOL is known, mention it in the intro: "...to find {QUERY_TYPE}-style content for use in {TARGET_TOOL}."
 
-This text MUST appear before you call any tools. It confirms to the user that you understood their request.
+Show this before calling any tools, so the user can see you understood the request.
 
 ---
 
@@ -318,7 +318,7 @@ The Judge Agent must:
 
 ## FIRST: Internalize the Research
 
-**CRITICAL: Ground your synthesis in the ACTUAL research content, not your pre-existing knowledge.**
+**Ground the synthesis in the research content, not prior knowledge.**
 
 Read the research output carefully. Pay attention to:
 - **Exact product/tool names** mentioned (e.g., if research mentions "ClawdBot" or "@clawdbot", that's a DIFFERENT product than "Claude Code" - don't conflate them)
@@ -329,7 +329,7 @@ Read the research output carefully. Pay attention to:
 
 ### If QUERY_TYPE = RECOMMENDATIONS
 
-**CRITICAL: Extract SPECIFIC NAMES, not generic patterns.**
+**Extract specific names, not generic patterns.**
 
 When user asks "best X" or "top X", they want a LIST of specific things:
 - Scan research for specific product names, tool names, project names, skill names, etc.
@@ -374,8 +374,8 @@ Sources: @handle3, r/sub2, Complex
 Notable mentions: [other specific things with 1-2 mentions]
 ```
 
-**CRITICAL for RECOMMENDATIONS:**
-- Each item MUST have a "Sources:" line with actual @handles from X posts (e.g., @LONGLIVE47, @ByDobson)
+**For RECOMMENDATIONS:**
+- Give each item a "Sources:" line with real @handles from the X posts (e.g., @LONGLIVE47, @ByDobson)
 - Include subreddit names (r/hiphopheads) and web sources (Complex, Variety)
 - Parse @handles from research output and include the highest-engagement ones
 - Format naturally - tables work well for wide terminals, stacked cards for narrow
@@ -428,7 +428,7 @@ KEY PATTERNS from the research:
 
 **THEN - Stats (right before invitation):**
 
-**CRITICAL: Calculate actual totals from the research output.**
+**Calculate the totals from the research output.**
 - Count posts/threads from each section
 - Sum engagement: parse `[Xlikes, Yrt]` from each X post, `[Xpts, Ycmt]` from Reddit
 - Identify top voices: highest-engagement @handles from X, most active subreddits
@@ -457,7 +457,7 @@ NEVER use plain text dashes (-) or pipe (|). ALWAYS use ├─ └─ │ and th
 
 **LAST - Invitation (adapt to QUERY_TYPE):**
 
-**CRITICAL: Every invitation MUST include 2-3 specific example suggestions based on what you ACTUALLY learned from the research.** Don't be generic; show the user you absorbed the content by referencing real things from the results.
+**Include 2-3 example suggestions drawn from what the research actually found**, referencing real things from the results rather than generic ideas.
 
 **If QUERY_TYPE = PROMPTING:**
 ```
@@ -542,9 +542,9 @@ After showing the stats summary with your invitation, **STOP and wait** for the 
 
 When the user wants a prompt, write a **single, highly-tailored prompt** using your research expertise.
 
-### CRITICAL: Match the FORMAT the research recommends
+### Match the format the research recommends
 
-**If research says to use a specific prompt FORMAT, YOU MUST USE THAT FORMAT.**
+**If the research recommends a specific prompt format (JSON, structured params), write the prompt in that format.**
 
 **ANTI-PATTERN**: Research says "use JSON prompts with device specs" but you write plain prose. This defeats the entire purpose of the research.
 
@@ -593,15 +593,11 @@ For the rest of this conversation, remember:
 - **KEY PATTERNS**: {list the top 3-5 patterns you learned}
 - **RESEARCH FINDINGS**: The key facts and insights from the research
 
-**CRITICAL: After research is complete, you are now an EXPERT on this topic.**
+When the user asks follow-up questions on the same topic:
+- **Answer from the research you already have** - cite the Reddit threads, X posts, and web sources
+- **If they ask for a prompt** - write one using what the research taught you
 
-When the user asks follow-up questions:
-- **DO NOT run new WebSearches** - you already have the research
-- **Answer from what you learned** - cite the Reddit threads, X posts, and web sources
-- **If they ask a question** - answer it from your research findings
-- **If they ask for a prompt** - write one using your expertise
-
-Only do new research if the user explicitly asks about a DIFFERENT topic.
+Search again only for a different topic or when the research has a clear gap.
 
 ---
 
