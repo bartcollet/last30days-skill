@@ -97,6 +97,34 @@ Return JSON:
   ]
 }}"""
 
+# Phase 2 drill-down: one web_search call covering the subreddits that Phase 1
+# surfaced. Replaces the old reddit.com/r/{sub}/search/.json + RSS lanes, which
+# Reddit closed to keyless clients (403 / RSS shutdown 2026-11-13).
+SUBREDDIT_SEARCH_PROMPT = """Find Reddit discussion threads about "{core}" in these subreddits only: {sub_list}
+
+Run one search per subreddit, for example:
+{query_examples}
+
+DATE RANGE: Only include threads from {from_date} to {to_date}.
+Return fewer results rather than older ones.
+
+REQUIRED: URLs must contain "/r/<one of the listed subreddits>/comments/"
+Up to {count_per} threads per subreddit.
+
+Return JSON:
+{{
+  "items": [
+    {{
+      "title": "Thread title",
+      "url": "https://www.reddit.com/r/sub/comments/xyz/title/",
+      "subreddit": "subreddit_name",
+      "date": "YYYY-MM-DD or null",
+      "why_relevant": "Why relevant",
+      "relevance": 0.7
+    }}
+  ]
+}}"""
+
 
 def _extract_core_subject(topic: str) -> str:
     """Extract core subject from verbose query for retry."""
@@ -129,6 +157,7 @@ def search_reddit(
     depth: str = "default",
     mock_response: Optional[Dict] = None,
     _retry: bool = False,
+    input_text: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Search Reddit for relevant threads using OpenAI Responses API.
 
@@ -140,6 +169,8 @@ def search_reddit(
         to_date: End date (YYYY-MM-DD) - only include threads before this
         depth: Research depth - "quick", "default", or "deep"
         mock_response: Mock response for testing
+        input_text: Full prompt override (Phase 2 subreddit drill-down);
+            ``topic``/``depth`` then only steer the timeout
 
     Returns:
         Raw API response
@@ -162,13 +193,14 @@ def search_reddit(
 
     # Note: allowed_domains accepts base domain, not subdomains
     # We rely on prompt to filter out developers.reddit.com, etc.
-    input_text = REDDIT_SEARCH_PROMPT.format(
-        topic=topic,
-        from_date=from_date,
-        to_date=to_date,
-        min_items=min_items,
-        max_items=max_items,
-    )
+    if input_text is None:
+        input_text = REDDIT_SEARCH_PROMPT.format(
+            topic=topic,
+            from_date=from_date,
+            to_date=to_date,
+            min_items=min_items,
+            max_items=max_items,
+        )
 
     last_error = None
     for current_model in models_to_try:
@@ -208,93 +240,93 @@ def search_reddit(
     raise http.HTTPError("No models available")
 
 
+def build_subreddit_prompt(
+    subreddits: List[str],
+    topic: str,
+    from_date: str,
+    to_date: str,
+    count_per: int,
+) -> str:
+    """Build the Phase 2 prompt for a subreddit-scoped OpenAI web_search."""
+    core = _extract_core_subject(topic)
+    examples = "\n".join(f'- "{core} r/{sub} site:reddit.com"' for sub in subreddits)
+    return SUBREDDIT_SEARCH_PROMPT.format(
+        core=core,
+        sub_list=", ".join(f"r/{sub}" for sub in subreddits),
+        query_examples=examples,
+        from_date=from_date,
+        to_date=to_date,
+        count_per=count_per,
+    )
+
+
 def search_subreddits(
     subreddits: List[str],
     topic: str,
     from_date: str,
     to_date: str,
     count_per: int = 5,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+    mock_response: Optional[Dict] = None,
 ) -> List[Dict[str, Any]]:
-    """Search specific subreddits via Reddit's free JSON endpoint.
+    """Phase 2 drill-down: find threads in specific subreddits via OpenAI web_search.
 
-    No API key needed. Uses reddit.com/r/{sub}/search/.json endpoint.
-    Used in Phase 2 supplemental search after entity extraction.
+    One web_search call covers all subreddits. Never contacts reddit.com
+    directly. Items outside the requested subreddits are dropped.
 
     Args:
-        subreddits: List of subreddit names (without r/)
+        subreddits: Subreddit names (with or without "r/")
         topic: Search topic
         from_date: Start date (YYYY-MM-DD)
         to_date: End date (YYYY-MM-DD)
-        count_per: Results to request per subreddit
+        count_per: Max threads kept per subreddit
+        api_key: OpenAI API key (no key -> no drill-down)
+        model: OpenAI model
+        mock_response: Canned Responses-API payload for tests
 
     Returns:
-        List of raw item dicts (same format as parse_reddit_response output).
+        List of item dicts with ids RS1.., same shape as parse_reddit_response.
     """
-    all_items = []
-    core = _extract_core_subject(topic)
-
+    # removeprefix, NOT lstrip: lstrip("r/") strips ANY leading r/ chars, so
+    # "rust" -> "ust" and "robotics" -> "obotics". (Idea-ported from 5994b4f.)
+    subs = []
     for sub in subreddits:
-        # removeprefix, NOT lstrip: lstrip("r/") strips ANY leading r/ chars, so
-        # "rust" -> "ust" and "robotics" -> "obotics". (Idea-ported from 5994b4f.)
-        sub = sub.removeprefix("r/")
-        try:
-            url = f"https://www.reddit.com/r/{sub}/search/.json"
-            params = f"q={_url_encode(core)}&restrict_sr=on&sort=new&limit={count_per}&raw_json=1"
-            full_url = f"{url}?{params}"
+        name = sub.removeprefix("r/").strip()
+        if name and name.lower() not in {s.lower() for s in subs}:
+            subs.append(name)
+    if not subs or (not api_key and mock_response is None):
+        return []
 
-            # Reddit 403s the generic UA; use a browser fingerprint.
-            headers = dict(http.BROWSER_HEADERS)
-            headers["Accept"] = "application/json"
+    prompt = build_subreddit_prompt(subs, topic, from_date, to_date, count_per)
+    try:
+        raw = search_reddit(
+            api_key or "", model or "", topic, from_date, to_date,
+            depth="quick", mock_response=mock_response, input_text=prompt,
+        )
+    except http.HTTPError as e:
+        _log_info(f"Subreddit drill-down failed: {e}")
+        return []
 
-            data = http.get(full_url, headers=headers, timeout=15)
-
-            # Reddit search returns {"data": {"children": [...]}}
-            children = data.get("data", {}).get("children", [])
-            for i, child in enumerate(children):
-                if child.get("kind") != "t3":  # t3 = link/submission
-                    continue
-                post = child.get("data", {})
-                permalink = post.get("permalink", "")
-                if not permalink:
-                    continue
-
-                item = {
-                    "id": f"RS{len(all_items)+1}",
-                    "title": str(post.get("title", "")).strip(),
-                    "url": f"https://www.reddit.com{permalink}",
-                    "subreddit": str(post.get("subreddit", sub)).strip(),
-                    "date": None,
-                    "why_relevant": f"Found in r/{sub} supplemental search",
-                    "relevance": 0.65,  # Slightly lower default for supplemental
-                }
-
-                # Parse date from created_utc
-                created_utc = post.get("created_utc")
-                if created_utc:
-                    from . import dates as dates_mod
-                    item["date"] = dates_mod.timestamp_to_date(created_utc)
-
-                all_items.append(item)
-
-        except http.HTTPError as e:
-            _log_info(f"Subreddit search failed for r/{sub}: {e}")
-        except Exception as e:
-            _log_info(f"Subreddit search error for r/{sub}: {e}")
-
-    # Tier 1 fallback: the /search/.json endpoint now 403s even with a browser
-    # UA, so if it produced nothing, fall through to the keyless RSS feeds.
-    if not all_items:
-        from . import reddit_rss
-        _log_info("Subreddit .json search empty; falling back to keyless RSS")
-        all_items = reddit_rss.search_subreddits_rss(subreddits, core, count_per=count_per)
-
-    return all_items
-
-
-def _url_encode(text: str) -> str:
-    """Simple URL encoding for query parameters."""
-    import urllib.parse
-    return urllib.parse.quote_plus(text)
+    wanted = {s.lower(): s for s in subs}
+    per_sub: Dict[str, int] = {}
+    out: List[Dict[str, Any]] = []
+    for item in parse_reddit_response(raw or {}):
+        m = re.search(r"/r/([^/]+)/comments/", item.get("url", ""))
+        sub_key = (m.group(1) if m else item.get("subreddit", "")).lower()
+        if sub_key not in wanted:
+            continue
+        if per_sub.get(sub_key, 0) >= count_per:
+            continue
+        per_sub[sub_key] = per_sub.get(sub_key, 0) + 1
+        item["id"] = f"RS{len(out) + 1}"
+        item["subreddit"] = wanted[sub_key]
+        # Slightly lower ceiling than Phase 1: these are targeted top-ups.
+        item["relevance"] = min(item.get("relevance", 0.65), 0.65)
+        if not item.get("why_relevant"):
+            item["why_relevant"] = f"Found in r/{wanted[sub_key]} drill-down"
+        out.append(item)
+    return out
 
 
 def parse_reddit_response(response: Dict[str, Any]) -> List[Dict[str, Any]]:

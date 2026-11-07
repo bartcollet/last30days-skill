@@ -53,27 +53,10 @@ RETRY_DELAY = 1.0
 MAX_RETRY_DELAY = 30.0  # cap exponential backoff so a flaky host can't stall for minutes
 USER_AGENT = "last30days-skill/2.0 (Claude Code Skill)"
 
-# A current-Chrome fingerprint. Reddit's public JSON/RSS endpoints return 403 to
-# the generic urllib User-Agent + minimal header set, while matching browser
-# requests succeed. Used for keyless Reddit fetches; the API clients keep their
-# Bearer-auth header sets. (Idea-ported from upstream 4bae05e / 8d3a9e4.)
-BROWSER_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate",
-    "Connection": "keep-alive",
-}
-
-
 def _decode_body(response) -> str:
     """Read an HTTP response body, transparently decompressing gzip/deflate.
 
-    Browser-like requests advertise ``Accept-Encoding: gzip, deflate`` so hosts
-    (Reddit in particular) may return a compressed body that plain
+    Some hosts return a compressed body even when not asked, which plain
     ``.decode('utf-8')`` would choke on.
     """
     raw = response.read()
@@ -200,74 +183,6 @@ def get(url: str, headers: Optional[Dict[str, str]] = None, **kwargs) -> Dict[st
     return request("GET", url, headers=headers, **kwargs)
 
 
-def get_text(
-    url: str,
-    timeout: int = DEFAULT_TIMEOUT,
-    retries: int = 2,
-    accept: str = "*/*",
-    headers: Optional[Dict[str, str]] = None,
-) -> Optional[str]:
-    """Fetch a URL and return decoded text, or None on any failure.
-
-    Keyless helper for Reddit RSS and shreddit HTML endpoints — the free path
-    that replaced the now-403 ``.json`` endpoints. Sends a browser User-Agent,
-    decompresses gzip/deflate, and never raises: returns None on HTTP error,
-    network failure, or timeout so tiered callers fall through cleanly.
-    (Idea-ported from upstream 8d3a9e4's http.get_text.)
-    """
-    merged = dict(BROWSER_HEADERS)
-    merged["Accept"] = accept
-    if headers:
-        merged.update(headers)
-
-    req = urllib.request.Request(url, headers=merged, method="GET")
-    log(f"GET (text) {url}")
-
-    for attempt in range(retries):
-        try:
-            with urllib.request.urlopen(req, timeout=timeout, context=_get_ssl_context()) as response:
-                return _decode_body(response)
-        except urllib.error.HTTPError as e:
-            log(f"get_text HTTP {e.code}: {e.reason} ({url})")
-            # Client errors (except rate limit) won't improve on retry.
-            if 400 <= e.code < 500 and e.code != 429:
-                return None
-            if attempt < retries - 1:
-                time.sleep(_backoff_delay(attempt))
-        except (urllib.error.URLError, OSError, TimeoutError) as e:
-            log(f"get_text network error: {type(e).__name__}: {e} ({url})")
-            if attempt < retries - 1:
-                time.sleep(_backoff_delay(attempt))
-    return None
-
-
 def post(url: str, json_data: Dict[str, Any], headers: Optional[Dict[str, str]] = None, **kwargs) -> Dict[str, Any]:
     """Make a POST request with JSON body."""
     return request("POST", url, headers=headers, json_data=json_data, **kwargs)
-
-
-def get_reddit_json(path: str) -> Dict[str, Any]:
-    """Fetch Reddit thread JSON.
-
-    Args:
-        path: Reddit path (e.g., /r/subreddit/comments/id/title)
-
-    Returns:
-        Parsed JSON response
-    """
-    # Ensure path starts with /
-    if not path.startswith('/'):
-        path = '/' + path
-
-    # Remove trailing slash and add .json
-    path = path.rstrip('/')
-    if not path.endswith('.json'):
-        path = path + '.json'
-
-    url = f"https://www.reddit.com{path}?raw_json=1"
-
-    # Reddit 403s the generic UA; use a browser fingerprint (see BROWSER_HEADERS).
-    headers = dict(BROWSER_HEADERS)
-    headers["Accept"] = "application/json"
-
-    return get(url, headers=headers)

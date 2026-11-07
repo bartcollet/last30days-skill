@@ -474,6 +474,8 @@ def _run_supplemental(
     depth: str,
     x_source: str,
     progress: ui.ProgressDisplay = None,
+    openai_key: str = None,
+    openai_model: str = None,
 ) -> tuple:
     """Run Phase 2 supplemental searches based on entities from Phase 1.
 
@@ -489,6 +491,8 @@ def _run_supplemental(
         depth: Research depth
         x_source: 'bird' or 'xai'
         progress: Optional progress display
+        openai_key: OpenAI key for the subreddit drill-down (web_search)
+        openai_model: OpenAI model for the subreddit drill-down
 
     Returns:
         Tuple of (supplemental_reddit, supplemental_x)
@@ -511,7 +515,8 @@ def _run_supplemental(
     )
 
     has_handles = entities["x_handles"] and x_source == "bird"
-    has_subs = entities["reddit_subreddits"]
+    # Subreddit drill-down runs through OpenAI web_search, so it needs a key.
+    has_subs = entities["reddit_subreddits"] if openai_key else []
 
     if not has_handles and not has_subs:
         return [], []
@@ -547,6 +552,8 @@ def _run_supplemental(
                 from_date,
                 to_date,
                 count_per,
+                openai_key,
+                openai_model,
             )
 
         if has_handles:
@@ -748,9 +755,9 @@ def run_research(
 
     # Enrich Reddit items with real data (sequential, but with error handling per-item)
     # Global budget: 90s total for all Reddit enrichment to prevent runaway hangs.
-    # Each item does a .json hit (now a fast 403) then a shreddit scrape (up to
-    # 12s x 2 retries), so a long item list could otherwise stall for minutes.
-    # Mirrors the X-enrich budget below.
+    # Each item makes two Arctic Shift calls (comments + post, 15s timeout, one
+    # paused retry on overload), so a long item list could otherwise stall for
+    # minutes. Mirrors the X-enrich budget below.
     import time as _time
     reddit_enrich_deadline = _time.monotonic() + 90
 
@@ -770,7 +777,7 @@ def run_research(
 
             try:
                 if mock:
-                    mock_thread = load_fixture("reddit_thread_sample.json")
+                    mock_thread = load_fixture("arctic_thread_sample.json")
                     reddit_items[i] = reddit_enrich.enrich_reddit_item(item, mock_thread)
                 else:
                     reddit_items[i] = reddit_enrich.enrich_reddit_item(item)
@@ -790,6 +797,8 @@ def run_research(
         sup_reddit, sup_x = _run_supplemental(
             topic, reddit_items, x_items,
             from_date, to_date, depth, x_source, progress,
+            openai_key=config.get("OPENAI_API_KEY"),
+            openai_model=(selected_models or {}).get("openai"),
         )
         if sup_reddit:
             reddit_items.extend(sup_reddit)

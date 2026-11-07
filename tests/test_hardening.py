@@ -2,8 +2,9 @@
 
 Covers:
 - coerce.py defensive numeric coercion
-- http.py browser headers, gzip/deflate decode, exponential backoff
-- get_reddit_json / search_subreddits browser fingerprint + removeprefix
+- http.py gzip/deflate decode, exponential backoff
+- search_subreddits removeprefix (browser-header tests removed 2026-11-07
+  with the keyless reddit.com lanes; see test_reddit_arctic.py)
 - xai_x.parse_x_response raising on unparseable 200 (not on genuine empty)
 - parse_*_response tolerating weird relevance/engagement values
 - bird_x._run_bird_search retrying once on non-JSON stdout
@@ -128,24 +129,6 @@ class TestBackoff(unittest.TestCase):
         self.assertLessEqual(http._backoff_delay(20), http.MAX_RETRY_DELAY)
 
 
-class TestBrowserHeaders(unittest.TestCase):
-    def test_browser_headers_present(self):
-        self.assertIn("Mozilla/5.0", http.BROWSER_HEADERS["User-Agent"])
-        self.assertIn("Accept-Language", http.BROWSER_HEADERS)
-
-    def test_get_reddit_json_uses_browser_ua(self):
-        captured = {}
-
-        def fake_urlopen(req, **kwargs):
-            captured["ua"] = req.get_header("User-agent")
-            return _FakeResponse(b'[{"data": {"children": []}}]', _Headers())
-
-        with mock.patch("lib.http.urllib.request.urlopen", side_effect=fake_urlopen):
-            http.get_reddit_json("/r/test/comments/abc/title")
-
-        self.assertIn("Mozilla/5.0", captured["ua"])
-
-
 # --------------------------------------------------------------------------- #
 # Reddit: removeprefix
 # --------------------------------------------------------------------------- #
@@ -153,16 +136,19 @@ class TestSubredditNamePreserved(unittest.TestCase):
     def test_search_subreddits_does_not_mangle_name(self):
         captured = {}
 
-        def fake_get(url, headers=None, **kwargs):
-            captured["url"] = url
-            return {"data": {"children": []}}
+        def fake_post(url, payload, **kwargs):
+            captured["input"] = payload["input"]
+            return {"output": []}
 
-        with mock.patch("lib.openai_reddit.http.get", side_effect=fake_get):
-            openai_reddit.search_subreddits(["r/rust"], "memory safety", "2026-01-01", "2026-01-31")
+        with mock.patch("lib.openai_reddit.http.post", side_effect=fake_post):
+            openai_reddit.search_subreddits(
+                ["r/rust"], "memory safety", "2026-01-01", "2026-01-31",
+                api_key="k", model="gpt-test",
+            )
 
         # "rust" must survive; lstrip("r/") would have produced "ust".
-        self.assertIn("/r/rust/", captured["url"])
-        self.assertNotIn("/r/ust/", captured["url"])
+        self.assertIn("r/rust", captured["input"])
+        self.assertNotIn("r/ust", captured["input"])
 
     def test_parse_response_preserves_subreddit(self):
         resp = {

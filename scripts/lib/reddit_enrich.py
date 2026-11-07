@@ -1,109 +1,14 @@
-"""Reddit thread enrichment with real engagement metrics."""
+"""Reddit thread enrichment: comment count and top comments via Arctic Shift.
+
+Reddit's own keyless endpoints are closed (see ``reddit_arctic``), so the fork
+no longer contacts reddit.com here. Upvote scores are not available from a
+trustworthy source and stay ``None``; the report shows them as unknown.
+"""
 
 import re
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
 
-from . import http, dates
-
-
-def extract_reddit_path(url: str) -> Optional[str]:
-    """Extract the path from a Reddit URL.
-
-    Args:
-        url: Reddit URL
-
-    Returns:
-        Path component or None
-    """
-    try:
-        parsed = urlparse(url)
-        if "reddit.com" not in parsed.netloc:
-            return None
-        return parsed.path
-    except:
-        return None
-
-
-def fetch_thread_data(url: str, mock_data: Optional[Dict] = None) -> Optional[Dict[str, Any]]:
-    """Fetch Reddit thread JSON data.
-
-    Args:
-        url: Reddit thread URL
-        mock_data: Mock data for testing
-
-    Returns:
-        Thread data dict or None on failure
-    """
-    if mock_data is not None:
-        return mock_data
-
-    path = extract_reddit_path(url)
-    if not path:
-        return None
-
-    try:
-        data = http.get_reddit_json(path)
-        return data
-    except http.HTTPError:
-        return None
-
-
-def parse_thread_data(data: Any) -> Dict[str, Any]:
-    """Parse Reddit thread JSON into structured data.
-
-    Args:
-        data: Raw Reddit JSON response
-
-    Returns:
-        Dict with submission and comments data
-    """
-    result = {
-        "submission": None,
-        "comments": [],
-    }
-
-    if not isinstance(data, list) or len(data) < 1:
-        return result
-
-    # First element is submission listing
-    submission_listing = data[0]
-    if isinstance(submission_listing, dict):
-        children = submission_listing.get("data", {}).get("children", [])
-        if children:
-            sub_data = children[0].get("data", {})
-            result["submission"] = {
-                "score": sub_data.get("score"),
-                "num_comments": sub_data.get("num_comments"),
-                "upvote_ratio": sub_data.get("upvote_ratio"),
-                "created_utc": sub_data.get("created_utc"),
-                "permalink": sub_data.get("permalink"),
-                "title": sub_data.get("title"),
-                "selftext": sub_data.get("selftext", "")[:500],  # Truncate
-            }
-
-    # Second element is comments listing
-    if len(data) >= 2:
-        comments_listing = data[1]
-        if isinstance(comments_listing, dict):
-            children = comments_listing.get("data", {}).get("children", [])
-            for child in children:
-                if child.get("kind") != "t1":  # t1 = comment
-                    continue
-                c_data = child.get("data", {})
-                if not c_data.get("body"):
-                    continue
-
-                comment = {
-                    "score": c_data.get("score", 0),
-                    "created_utc": c_data.get("created_utc"),
-                    "author": c_data.get("author", "[deleted]"),
-                    "body": c_data.get("body", "")[:300],  # Truncate
-                    "permalink": c_data.get("permalink"),
-                }
-                result["comments"].append(comment)
-
-    return result
+from . import dates, reddit_arctic
 
 
 def get_top_comments(comments: List[Dict], limit: int = 10) -> List[Dict[str, Any]]:
@@ -179,37 +84,41 @@ def enrich_reddit_item(
     item: Dict[str, Any],
     mock_thread_data: Optional[Dict] = None,
 ) -> Dict[str, Any]:
-    """Enrich a Reddit item with real engagement data.
+    """Enrich a Reddit item with comment count and top comments.
 
     Args:
         item: Reddit item dict
-        mock_thread_data: Mock data for testing
+        mock_thread_data: ``{"post": ..., "comments": [...]}`` in
+            ``reddit_arctic.fetch_thread`` shape, for tests and ``--mock``
 
     Returns:
-        Enriched item dict
+        The item, enriched where data was available (never raises on a miss)
     """
     url = item.get("url", "")
+    if mock_thread_data is not None:
+        thread = mock_thread_data
+    elif url:
+        thread = reddit_arctic.fetch_thread(url)
+    else:
+        return item
 
-    # Tier 0: the legacy {thread}.json path (still works for some IPs).
-    thread_data = fetch_thread_data(url, mock_thread_data)
-    submission = None
-    comments = []
-    if thread_data:
-        parsed = parse_thread_data(thread_data)
-        submission = parsed.get("submission")
-        comments = parsed.get("comments", [])
+    if not isinstance(thread, dict):
+        return item
+    post = thread.get("post") if isinstance(thread.get("post"), dict) else None
+    comments = [c for c in (thread.get("comments") or []) if isinstance(c, dict)]
 
-    # Submission-level engagement is only available from the .json path.
-    if submission:
-        item["engagement"] = {
-            "score": submission.get("score"),
-            "num_comments": submission.get("num_comments"),
-            "upvote_ratio": submission.get("upvote_ratio"),
-        }
-
-        # Update date from actual data
-        created_utc = submission.get("created_utc")
+    if post:
+        num_comments = post.get("num_comments")
+        if isinstance(num_comments, int):
+            eng = item.setdefault("engagement", {})
+            # Arctic Shift's post score is captured at ingest and is stale, so
+            # it is never used; see reddit_arctic module docstring.
+            eng.setdefault("score", None)
+            eng["num_comments"] = num_comments
+            eng.setdefault("upvote_ratio", None)
+        created_utc = post.get("created_utc")
         if created_utc:
+            # Archive timestamp is authoritative; the OpenAI-reported date is a guess.
             item["date"] = dates.timestamp_to_date(created_utc)
 
     if comments:
@@ -226,21 +135,5 @@ def enrich_reddit_item(
                 "url": comment_url,
             })
         item["comment_insights"] = extract_comment_insights(top_comments)
-        return item
-
-    # Tier 2 fallback: .json gave no comments (now the common case — it 403s),
-    # so scrape the keyless shreddit comments endpoint. Skipped during mock runs
-    # (mock_thread_data drives the .json path deterministically in tests).
-    if mock_thread_data is None and url:
-        from . import reddit_shreddit
-        sh = reddit_shreddit.fetch_comments(url)
-        if sh["top_comments"] or sh["comment_insights"]:
-            item["top_comments"] = sh["top_comments"]
-            item["comment_insights"] = sh["comment_insights"]
-            if sh["num_comments"] is not None:
-                eng = item.setdefault("engagement", {})
-                eng.setdefault("score", None)
-                eng["num_comments"] = sh["num_comments"]
-                eng.setdefault("upvote_ratio", None)
 
     return item

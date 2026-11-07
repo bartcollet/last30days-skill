@@ -113,6 +113,14 @@ The script will automatically:
 
 ---
 
+## Reddit data (since 2026-11-07)
+
+Reddit closed its keyless routes (`.json` 403s, RSS ends 2026-11-13, the Data API stopped taking new apps on 2026-10-31). The skill never contacts reddit.com directly:
+
+- **Discovery** (Phase 1 and the Phase 2 subreddit drill-down): OpenAI `web_search` scoped to reddit.com.
+- **Comments + comment count**: the Arctic Shift public archive (`scripts/lib/reddit_arctic.py`), best-effort. If it is slow or down, threads still appear, just without comments.
+- **Upvotes: not available.** The archive's post score is captured at posting time and is stale, so it is deliberately not used. Report Reddit engagement as comment counts only.
+
 ## Python-side keyless sources + domain gating
 
 In addition to Reddit/X, the script runs three **keyless** sources entirely inside Python; you take no action for these, they arrive in the compact output alongside Reddit/X:
@@ -303,7 +311,7 @@ Merge extracted items across pages; count cross-source mentions to rank by popul
 **After all searches and deep scrapes complete, internally synthesize (don't display stats yet):**
 
 The Judge Agent must:
-1. Weight Reddit/X sources HIGHER (they have engagement signals: upvotes, likes)
+1. Weight Reddit/X sources HIGHER (they have engagement signals: Reddit comment counts and top comments, X likes). Reddit upvotes are not available (see "Reddit data" below), so never invent or estimate them
 2. Weight **deep-scraped content** next (full context > preview)
 3. Weight **Firecrawl RICH highlights** just below scraped content: they are verbatim page excerpts with citable facts, well above snippet tier
 4. Weight snippet-only results (Brave, THIN fallbacks, WebSearch) LOWEST (no engagement data, no full content). Present an undated web result as recent only when its content shows a date inside the window; otherwise use it as background, not as a recent development
@@ -438,7 +446,7 @@ KEY PATTERNS from the research:
 ```
 ---
 ✅ All agents reported back!
-├─ 🟠 Reddit: {N} threads │ {N} upvotes │ {N} comments
+├─ 🟠 Reddit: {N} threads │ {N} comments
 ├─ 🔵 X: {N} posts │ {N} likes │ {N} reposts (via Bird/xAI)
 ├─ 🟧 HN: {N} stories │ {N} points │ {N} comments
 ├─ 🐙 GitHub: {N} issues/PRs │ {N} reactions
@@ -608,7 +616,7 @@ After delivering a prompt, end with:
 ```
 ---
 📚 Expert in: {TOPIC} for {TARGET_TOOL}
-📊 Based on: {n} Reddit threads ({sum} upvotes) + {n} X posts ({sum} likes) + {n} web pages
+📊 Based on: {n} Reddit threads ({sum} comments) + {n} X posts ({sum} likes) + {n} web pages
 
 Want another prompt? Just tell me what you're creating next.
 ```

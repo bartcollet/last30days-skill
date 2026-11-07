@@ -71,7 +71,7 @@ def render_compact(report: schema.Report, limit: int = 15, missing_keys: str = "
         lines.append("")
         lines.append("---")
         lines.append("**⚡ Want better results?** Add API keys to unlock Reddit & X data:")
-        lines.append("- `OPENAI_API_KEY` → Reddit threads with real upvotes & comments")
+        lines.append("- `OPENAI_API_KEY` → Reddit threads, with comment counts & top comments")
         lines.append("- `XAI_API_KEY` → X posts with real likes & reposts")
         lines.append("- Edit `~/.config/last30days/.env` to add keys")
         lines.append("---")
@@ -413,7 +413,10 @@ def render_full_report(report: schema.Report) -> str:
 
             if item.engagement:
                 eng = item.engagement
-                lines.append(f"- **Engagement:** {eng.score or '?'} points, {eng.num_comments or '?'} comments")
+                # Upvotes are unavailable since the 2026-11 Reddit rework (no
+                # trustworthy keyless source); show them only when present.
+                pts = f"{eng.score} points, " if eng.score is not None else ""
+                lines.append(f"- **Engagement:** {pts}{eng.num_comments if eng.num_comments is not None else '?'} comments")
 
             if item.comment_insights:
                 lines.append("")

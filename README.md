@@ -804,13 +804,13 @@ At least one API key is required. Bird CLI is recommended for X search since it'
 - OpenAI Responses API with `web_search` tool scoped to reddit.com
 - Bird CLI (or xAI API) for X/Twitter search
 - WebSearch for blogs, news, docs, tutorials
-- Reddit JSON enrichment for real engagement metrics (upvotes, comments)
+- Reddit comment enrichment (comment count + top comments) via the Arctic Shift archive; no upvotes (fork change 2026-11-07)
 - Scoring algorithm weighing recency, relevance, and engagement
 
 **Phase 2: Smart supplemental search** (new in V2)
 - Extracts entities from Phase 1 results: @handles from X posts, subreddit names from Reddit
 - Runs targeted follow-up searches: `from:@handle topic` on X, subreddit-scoped searches on Reddit
-- Uses Reddit's free `.json` search endpoint (no API key needed for supplemental)
+- Reddit drill-down runs as one OpenAI `web_search` call scoped to the discovered subreddits (fork change 2026-11-07; Reddit closed the keyless `.json` and RSS endpoints)
 - Merges and deduplicates with Phase 1 results
 - Skipped on `--quick` for speed; extended on `--deep`
 
@@ -831,9 +831,9 @@ V2 finds significantly more content than V1. Two major improvements:
 
 **Smarter query construction** - V1 sent overly specific queries to X search (literal keyword AND matching), causing 0 results on topics that were actively trending. V2 aggressively strips research/meta words ("best", "prompt", "techniques", "tips") and question prefixes ("what are people saying about") to extract just the core topic. Example: `"vibe motion best prompt techniques"` now searches for `"vibe motion"` instead of `"vibe motion prompt techniques"` — going from 0 posts to 12+. Automatically retries with fewer keywords if the first attempt returns nothing.
 
-**Smart supplemental search (Phase 2)** - After the initial broad search, extracts key @handles and subreddits from the results, then runs targeted follow-up searches to find content that keyword search alone misses. Example: researching "Open Claw" automatically discovers @openclaw, @steipete and drills into their posts. For Reddit, it hits the free `.json` search endpoint scoped to discovered subreddits — no extra API keys needed.
+**Smart supplemental search (Phase 2)** - After the initial broad search, extracts key @handles and subreddits from the results, then runs targeted follow-up searches to find content that keyword search alone misses. Example: researching "Open Claw" automatically discovers @openclaw, @steipete and drills into their posts. For Reddit, it runs an OpenAI web search scoped to the discovered subreddits (the fork no longer calls reddit.com directly).
 
-**Reddit JSON enrichment** - Fetches real upvote and comment counts from Reddit's free API for every thread, giving you actual engagement signals instead of estimates.
+**Reddit comment enrichment** - Fetches comment counts and the top comments for every thread from the Arctic Shift archive. (Originally Reddit's free `.json` API with upvotes; Reddit closed it to keyless clients, so this fork dropped upvotes on 2026-11-07.)
 
 ### Free X search via Bird CLI
 
