@@ -264,12 +264,14 @@ mcp__firecrawl__firecrawl_scrape({
   "url": "<target_url>",
   "formats": ["markdown"],
   "onlyMainContent": true,
-  "waitFor": 2000
+  "waitFor": 2000,
+  "maxAge": 0
 })
 ```
 
 - Use `markdown` format (feeds directly into synthesis)
 - `onlyMainContent: true` strips nav, footers, ads
+- `maxAge: 0` forces a fresh fetch: Firecrawl v2 otherwise serves a cached copy up to 2 days old, which can miss updates on a last-30-days topic (same credits either way; a fresh fetch is slower and fails a little more often, so on a failure move to the next URL)
 - Keep scraped content in memory for the Judge Agent; do not display raw scrapes to the user
 
 ### Structured extraction (RECOMMENDATIONS only)
@@ -279,21 +281,35 @@ For RECOMMENDATIONS queries, scrape the 3 comparison/review pages with the stron
 ```
 mcp__firecrawl__firecrawl_scrape({
   "url": "<comparison_page_url>",
-  "formats": ["extract"],
-  "extract": {
-    "prompt": "Extract all recommended {TOPIC} from this page",
+  "formats": ["json"],
+  "maxAge": 0,
+  "jsonOptions": {
+    "prompt": "Extract all recommended {TOPIC} from this page. description = 1 sentence; source_quote = the page's key quote about the item; price/rating null when absent.",
     "schema": {
-      "items": [{
-        "name": "string",
-        "description": "string (1 sentence)",
-        "price": "string or null",
-        "rating": "string or null",
-        "source_quote": "string (key quote about this item)"
-      }]
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {"type": "string"},
+              "description": {"type": "string"},
+              "price": {"type": ["string", "null"]},
+              "rating": {"type": ["string", "null"]},
+              "source_quote": {"type": "string"}
+            },
+            "required": ["name", "description"]
+          }
+        }
+      },
+      "required": ["items"]
     }
   }
 })
 ```
+
+Read the result from the `json` field. (The v1 `"extract"` format no longer exists: Firecrawl v1 shuts down on 2026-12-10.)
 
 Merge extracted items across pages; count cross-source mentions to rank by popularity.
 
