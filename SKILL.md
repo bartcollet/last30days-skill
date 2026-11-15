@@ -39,7 +39,7 @@ Common patterns:
 
 **DISPLAY your parsing to the user.** Before running any tools, output:
 
-```
+```text
 I'll research {TOPIC} across Reddit, X, and the web to find what's been discussed in the last 30 days.
 
 Parsed intent:
@@ -62,7 +62,7 @@ After parsing intent, the Python script outputs `### QUERY PARSED ###` markers w
 
 ### For clear, specific queries (proceed automatically):
 If the topic has 2+ specific words, a clear target tool, or an already-narrowed scope:
-```
+```text
 📋 Understood: researching "{TOPIC}" ({QUERY_TYPE})
    Searching Reddit, X, and Web...
 ```
@@ -74,7 +74,7 @@ If the topic has 2+ specific words, a clear target tool, or an already-narrowed 
 3. **Missing use case**; RECOMMENDATIONS type without context: "best AI tools" → for what purpose?
 4. **Overly long**; 10+ words often contain noise: suggest distilling to core subject
 
-```
+```text
 📋 Here's what I understood:
    Topic: "{TOPIC}"
    Type: {QUERY_TYPE}
@@ -259,7 +259,7 @@ Select URLs based on QUERY_TYPE relevance:
 
 ### How to scrape
 
-```
+```text
 mcp__firecrawl__firecrawl_scrape({
   "url": "<target_url>",
   "formats": ["markdown"],
@@ -278,7 +278,7 @@ mcp__firecrawl__firecrawl_scrape({
 
 For RECOMMENDATIONS queries, scrape the 3 comparison/review pages with the strongest highlight-informed relevance (not raw search position) with JSON extraction to auto-build a structured list:
 
-```
+```text
 mcp__firecrawl__firecrawl_scrape({
   "url": "<comparison_page_url>",
   "formats": ["json"],
@@ -384,7 +384,7 @@ Identify from the ACTUAL RESEARCH OUTPUT:
 **FIRST - What I learned (based on QUERY_TYPE):**
 
 **If RECOMMENDATIONS** - Show specific things mentioned with sources:
-```
+```text
 🏆 Most mentioned:
 
 [Tool Name] - {n}x mentions
@@ -435,7 +435,7 @@ Use the publication name, not the URL. The user doesn't need links; they need cl
 users are saying/feeling, then add web context only if needed. The user came
 here for the conversation, not the press release.
 
-```
+```text
 What I learned:
 
 **{Topic 1}**: [1-2 sentences about what people are saying, per @handle or r/sub]
@@ -459,7 +459,7 @@ KEY PATTERNS from the research:
 
 **Copy this EXACTLY, replacing only the {placeholders}:**
 
-```
+```text
 ---
 ✅ All agents reported back!
 ├─ 🟠 Reddit: {N} threads │ {N} comments
@@ -484,7 +484,7 @@ NEVER use plain text dashes (-) or pipe (|). ALWAYS use ├─ └─ │ and th
 **Include 2-3 example suggestions drawn from what the research actually found**, referencing real things from the results rather than generic ideas.
 
 **If QUERY_TYPE = PROMPTING:**
-```
+```text
 ---
 I'm now an expert on {TOPIC} for {TARGET_TOOL}. What do you want to make? For example:
 - [specific idea based on popular technique from research]
@@ -495,7 +495,7 @@ Just describe your vision and I'll write a prompt you can paste straight into {T
 ```
 
 **If QUERY_TYPE = RECOMMENDATIONS:**
-```
+```text
 ---
 I'm now an expert on {TOPIC}. Want me to go deeper? For example:
 - [Compare specific item A vs item B from the results]
@@ -504,7 +504,7 @@ I'm now an expert on {TOPIC}. Want me to go deeper? For example:
 ```
 
 **If QUERY_TYPE = NEWS:**
-```
+```text
 ---
 I'm now an expert on {TOPIC}. Some things you could ask:
 - [Specific follow-up question about the biggest story]
@@ -513,7 +513,7 @@ I'm now an expert on {TOPIC}. Some things you could ask:
 ```
 
 **If QUERY_TYPE = GENERAL:**
-```
+```text
 ---
 I'm now an expert on {TOPIC}. Some things I can help with:
 - [Specific question based on the most discussed aspect]
@@ -581,7 +581,7 @@ When the user wants a prompt, write a **single, highly-tailored prompt** using y
 
 ### Output Format:
 
-```
+```text
 Here's your prompt for {TARGET_TOOL}:
 
 ---
@@ -629,7 +629,7 @@ Search again only for a different topic or when the research has a clear gap.
 
 After delivering a prompt, end with:
 
-```
+```text
 ---
 📚 Expert in: {TOPIC} for {TARGET_TOOL}
 📊 Based on: {n} Reddit threads ({sum} comments) + {n} X posts ({sum} likes) + {n} web pages
